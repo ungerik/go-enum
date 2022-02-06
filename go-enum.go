@@ -7,8 +7,6 @@ import (
 	"go/token"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/ungerik/go-astvisit"
 )
@@ -30,39 +28,59 @@ func main() {
 	}
 
 	var (
-		args            = flag.Args()
-		cwd, _          = os.Getwd()
-		filePath        string
-		verboseWriter   io.Writer
-		printOnlyWriter io.Writer
+		path       = "."
+		verboseOut io.Writer
+		resultOut  io.Writer
 	)
-	if len(args) == 0 {
-		filePath = cwd
-	} else {
-		recursive := strings.HasSuffix(args[0], "...")
-		if args[0] == "." || args[0] == "./..." {
-			filePath = cwd
-		} else {
-			filePath = filepath.Clean(strings.TrimSuffix(args[0], "..."))
-		}
-		if recursive {
-			filePath = filepath.Join(filePath, "...")
-		}
+	if args := flag.Args(); len(args) > 0 {
+		path = args[0]
 	}
 	if verbose {
-		verboseWriter = os.Stdout
+		verboseOut = os.Stdout
 	}
 	if printOnly {
-		printOnlyWriter = os.Stdout
+		resultOut = os.Stdout
 	}
-
-	err = astvisit.Rewrite(filePath, verboseWriter, printOnlyWriter, rewriteAstFile)
+	err := astvisit.Rewrite(path, verboseOut, resultOut, rewriteFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "go-enum error:", err)
 		os.Exit(2)
 	}
 }
 
-func rewriteAstFile(fset *token.FileSet, filePkg *ast.Package, astFile *ast.File, filePath string, verboseWriter, printOnly io.Writer) error {
-	panic("todo")
+func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer) ([]byte, error) {
+	// ast.Print(fset, astFile)
+	// return nil, nil
+
+	var enumTypeSpecs []*ast.TypeSpec
+	for _, decl := range astFile.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec := spec.(*ast.TypeSpec)
+			for _, c := range typeSpec.Comment.List {
+				if c.Text == "//#enum" {
+					enumTypeSpecs = append(enumTypeSpecs, typeSpec)
+					break
+				}
+			}
+		}
+	}
+
+	if len(enumTypeSpecs) == 0 {
+		return nil, nil
+	}
+
+	for _, decl := range astFile.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.CONST {
+			continue
+		}
+		ast.Print(fset, genDecl)
+		return nil, nil
+	}
+
+	return nil, nil
 }
