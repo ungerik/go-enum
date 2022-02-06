@@ -48,28 +48,37 @@ func main() {
 	}
 }
 
+type enumSpec struct {
+	typeSpec *ast.TypeSpec
+	nullName string
+	names    []string
+	values   []ast.Expr
+}
+
 func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer) ([]byte, error) {
 	// ast.Print(fset, astFile)
 	// return nil, nil
 
-	var enumTypeSpecs []*ast.TypeSpec
+	enums := make(map[string]*enumSpec)
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
 		}
 		for _, spec := range genDecl.Specs {
-			typeSpec := spec.(*ast.TypeSpec)
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
 			for _, c := range typeSpec.Comment.List {
 				if c.Text == "//#enum" {
-					enumTypeSpecs = append(enumTypeSpecs, typeSpec)
+					enums[typeSpec.Name.Name] = &enumSpec{typeSpec: typeSpec}
 					break
 				}
 			}
 		}
 	}
-
-	if len(enumTypeSpecs) == 0 {
+	if len(enums) == 0 {
 		return nil, nil
 	}
 
@@ -79,6 +88,37 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 			continue
 		}
 		ast.Print(fset, genDecl)
+
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			enum, ok := enums[astvisit.ExprString(valueSpec.Type)]
+			if !ok {
+				continue
+			}
+			for i := range valueSpec.Names {
+				enum.names = append(enum.names, valueSpec.Names[i].Name)
+				enum.values = append(enum.values, valueSpec.Values[i])
+			}
+			if valueSpec.Comment != nil {
+				for _, c := range valueSpec.Comment.List {
+					if c.Text != "//#null" {
+						continue
+					}
+					if enum.nullName != "" {
+						return nil, fmt.Errorf("second //#null enum encountered %s", valueSpec.Names[0].Name)
+					}
+					if len(valueSpec.Names) > 1 {
+						return nil, fmt.Errorf("cant use //#null for multiple enums: %#v", valueSpec.Names)
+					}
+					enum.nullName = valueSpec.Names[0].Name
+					break
+				}
+			}
+		}
+
 		return nil, nil
 	}
 
