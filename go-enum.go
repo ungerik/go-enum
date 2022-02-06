@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"text/template"
 
 	"github.com/ungerik/go-astvisit"
 )
@@ -49,10 +50,20 @@ func main() {
 }
 
 type enumSpec struct {
-	typeSpec *ast.TypeSpec
-	nullName string
-	names    []string
-	values   []ast.Expr
+	Type string
+	Recv string
+
+	EnumNames  []string
+	EnumValues []ast.Expr
+	NullName   string
+
+	funcDeclValid       *ast.FuncDecl
+	funcDeclValidate    *ast.FuncDecl
+	funcDeclIsNull      *ast.FuncDecl
+	funcDeclIsNotNull   *ast.FuncDecl
+	funcDeclScan        *ast.FuncDecl
+	funcDeclValue       *ast.FuncDecl
+	funcDeclMarshalJSON *ast.FuncDecl
 }
 
 func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer) ([]byte, error) {
@@ -72,7 +83,7 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 			}
 			for _, c := range typeSpec.Comment.List {
 				if c.Text == "//#enum" {
-					enums[typeSpec.Name.Name] = &enumSpec{typeSpec: typeSpec}
+					enums[typeSpec.Name.Name] = &enumSpec{Type: typeSpec.Name.Name}
 					break
 				}
 			}
@@ -87,7 +98,7 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 		if !ok || genDecl.Tok != token.CONST {
 			continue
 		}
-		ast.Print(fset, genDecl)
+		// ast.Print(fset, genDecl)
 
 		for _, spec := range genDecl.Specs {
 			valueSpec, ok := spec.(*ast.ValueSpec)
@@ -99,28 +110,122 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 				continue
 			}
 			for i := range valueSpec.Names {
-				enum.names = append(enum.names, valueSpec.Names[i].Name)
-				enum.values = append(enum.values, valueSpec.Values[i])
+				enum.EnumNames = append(enum.EnumNames, valueSpec.Names[i].Name)
+				enum.EnumValues = append(enum.EnumValues, valueSpec.Values[i])
 			}
 			if valueSpec.Comment != nil {
 				for _, c := range valueSpec.Comment.List {
 					if c.Text != "//#null" {
 						continue
 					}
-					if enum.nullName != "" {
+					if enum.NullName != "" {
 						return nil, fmt.Errorf("second //#null enum encountered %s", valueSpec.Names[0].Name)
 					}
 					if len(valueSpec.Names) > 1 {
 						return nil, fmt.Errorf("cant use //#null for multiple enums: %#v", valueSpec.Names)
 					}
-					enum.nullName = valueSpec.Names[0].Name
+					enum.NullName = valueSpec.Names[0].Name
 					break
 				}
 			}
 		}
 
+		for _, decl := range astFile.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Recv == nil {
+				continue
+			}
+			recv := funcDecl.Recv.List[0]
+			recvType := astvisit.ExprString(recv.Type)
+			enum, ok := enums[recvType]
+			if !ok {
+				continue
+			}
+			switch funcDecl.Name.Name {
+			case "Valid":
+				enum.funcDeclValid = funcDecl
+			case "Validate":
+				enum.funcDeclValidate = funcDecl
+			case "IsNull":
+				enum.funcDeclIsNull = funcDecl
+			case "IsNotNull":
+				enum.funcDeclIsNotNull = funcDecl
+			case "Scan":
+				enum.funcDeclScan = funcDecl
+			case "Value":
+				enum.funcDeclValue = funcDecl
+			case "MarshalJSON":
+				enum.funcDeclMarshalJSON = funcDecl
+			}
+			// recvName := recv.Names[0].Name
+			// methodName := funcDecl.Name
+			// methodSignature := astvisit.FuncTypeString(funcDecl.Type)
+		}
 		return nil, nil
 	}
 
 	return nil, nil
 }
+
+var templateValid = template.Must(template.New("").Parse(`func ({{.Recv}} {{.Type}}) Valid() bool {
+	switch s {
+	case
+		{{$last := len (slice .Enums 1)}}{{range $i, $e := .Enums}}{{$e}}{{if $i lt $last}},{{else}}:{{end}}{{end}}
+		return true
+	}
+	return false
+}
+`))
+
+var templateValidate = template.Must(template.New("").Parse(`func ({{.Recv}} {{.Type}}) Validate() error {
+	if !{{.Recv}}.Valid() {
+		return fmt.Errorf("invalid value %#v for type {{.Type}}", {{.Recv}})
+	}
+	return nil
+}
+`))
+
+var templateIsNull = template.Must(template.New("").Parse(`func ({{.Recv}} {{.Type}}) IsNull() bool {
+	return {{.Recv}} == {{.NullName}}
+}
+`))
+
+var templateIsNotNull = template.Must(template.New("").Parse(`func ({{.Recv}} {{.Type}}) IsNotNull() bool {
+	return {{.Recv}} != {{.NullName}}
+}
+`))
+
+var templateScan = template.Must(template.New("").Parse(`// Scan implements the database/sql.Scanner interface.
+func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
+	switch x := value.(type) {
+	case string:
+		*s = {{.Type}}(x)
+	case []byte:
+		*s = {{.Type}}(x)
+	case nil:
+		*s = {{.NullName}}
+	default:
+		return fmt.Errorf("can't scan SQL value of type %T as {{.Type}}", value)
+	}
+	return nil
+}
+`))
+
+var templateValue = template.Must(template.New("").Parse(`// Value implements the driver database/sql/driver.Valuer interface.
+func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
+	if {{.Recv}} == {{.NullName}} {
+		return nil, nil
+	}
+	return string({{.Recv}}), nil
+}
+`))
+
+var templateMarshalJSON = template.Must(template.New("").Parse(`// MarshalJSON implements encoding/json.Marshaler
+// by returning the JSON null for an empty/null string.
+func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
+	if {{.Recv}} == {{.NullName}} {
+		return []byte("null"), nil
+	}
+	return json.Marshal(string({{.Recv}}))
+}
+`))
