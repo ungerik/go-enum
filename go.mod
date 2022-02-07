@@ -2,7 +2,7 @@ module github.com/ungerik/go-enum
 
 go 1.17
 
-require github.com/ungerik/go-astvisit v0.0.0-20220206112651-7c0861fb0b64
+require github.com/ungerik/go-astvisit v0.0.0-20220207190939-71f00b3ab979
 
 require (
 	golang.org/x/mod v0.5.1 // indirect

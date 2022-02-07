@@ -1,5 +1,5 @@
-github.com/ungerik/go-astvisit v0.0.0-20220206112651-7c0861fb0b64 h1:coMfYcml7n4nfVSyW1sFW5UbGT8lq6yyifRtlc3Y8YU=
-github.com/ungerik/go-astvisit v0.0.0-20220206112651-7c0861fb0b64/go.mod h1:E0bWVU7aWQqYqZX945iL4CEloZQmkMiVTcIJw6RP3PI=
+github.com/ungerik/go-astvisit v0.0.0-20220207190939-71f00b3ab979 h1:aaM2hpMkpBqrwaxabSlbwI10shCsDEu5RM3kv1K+p9Q=
+github.com/ungerik/go-astvisit v0.0.0-20220207190939-71f00b3ab979/go.mod h1:E0bWVU7aWQqYqZX945iL4CEloZQmkMiVTcIJw6RP3PI=
 github.com/yuin/goldmark v1.4.0/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 github.com/yuin/goldmark v1.4.1/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
