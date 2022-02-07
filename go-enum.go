@@ -336,7 +336,7 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 
 var templateMarshalJSON = template.Must(template.New("").Parse(`
 // MarshalJSON implements encoding/json.Marshaler for {{.Type}}
-// by returning the JSON null for an empty/null string.
+// by returning the JSON null value for an empty (null) string.
 func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
 	if {{.Recv}} == {{.Null}} {
 		return []byte("null"), nil
