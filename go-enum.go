@@ -46,56 +46,57 @@ func main() {
 	if printOnly {
 		resultOut = os.Stdout
 	}
-	err := astvisit.Rewrite(
+	err := astvisit.RewriteWithReplacements(
 		path,
 		verboseOut,
 		resultOut,
-		func(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer) ([]byte, error) {
-			return rewriteFile(fset, pkg, astFile, filePath, verboseOut, debug)
-		},
+		debug,
+		fileReplacements,
 	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "go-enum error:", err)
-		os.Exit(2)
+		os.Exit(1)
 	}
 }
 
-func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer, debug bool) ([]byte, error) {
+func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, filePath string, verboseOut io.Writer) (astvisit.NodeReplacements, astvisit.Imports, error) {
 	// ast.Print(fset, astFile)
 	// return nil, nil
 
 	enums, err := enums.Find(fset, pkg, astFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if len(enums) == 0 {
+		return nil, nil, nil
 	}
 
-	// Write method replacements
 	var (
 		replacements astvisit.NodeReplacements
-		importLines  = make(map[string]struct{})
+		imports      = make(astvisit.Imports)
 	)
 	for _, enum := range enums {
 		var methods bytes.Buffer
-		importLines[`"fmt"`] = struct{}{}
+		imports[`"fmt"`] = struct{}{}
 		err := templateValidValidate.Execute(&methods, enum)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if enum.IsNullable() {
 			err = templateIsNullIsNotNull.Execute(&methods, enum)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			importLines[`"encoding/json"`] = struct{}{}
+			imports[`"encoding/json"`] = struct{}{}
 			err = templateMarshalJSON.Execute(&methods, enum)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if enum.IsStringType() {
-				importLines[`"database/sql/driver"`] = struct{}{}
+				imports[`"database/sql/driver"`] = struct{}{}
 				err = templateScanValue.Execute(&methods, enum)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 		}
@@ -121,36 +122,8 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 			}
 		}
 	}
-	if len(replacements) == 0 {
-		return nil, nil
-	}
 
-	source, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var rewritten []byte
-	if debug {
-		rewritten, err = replacements.DebugApply(fset, source)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		rewritten, err = replacements.Apply(fset, source)
-		if err != nil {
-			return nil, err
-		}
-		rewritten, err = astvisit.FormatFileWithImports(fset, rewritten, importLines)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if bytes.Equal(source, rewritten) {
-		return nil, nil
-	}
-	return rewritten, nil
+	return replacements, imports, nil
 }
 
 var templateValidValidate = template.Must(template.New("").Parse(`
