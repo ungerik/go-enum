@@ -98,7 +98,7 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 		}
 		for _, spec := range genDecl.Specs {
 			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
+			if !ok || typeSpec.Comment == nil {
 				continue
 			}
 			for _, c := range typeSpec.Comment.List {
@@ -279,7 +279,7 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 var templateValidValidate = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Valid() bool {
-	switch s {
+	switch {{.Recv}} {
 	case
 		{{$lastIndex := .LastIndex}}{{range $index, $element := .Enums}}{{$element}}{{if lt $index $lastIndex}},
 		{{else}}:{{end}}{{end}}
