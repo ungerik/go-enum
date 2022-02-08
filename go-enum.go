@@ -61,6 +61,8 @@ func main() {
 }
 
 type enumSpec struct {
+	File       string
+	Line       int
 	Package    string
 	Type       string
 	Underlying string
@@ -69,7 +71,7 @@ type enumSpec struct {
 	Null       string
 	// EnumValues []ast.Expr
 
-	lastEnumDecl     *ast.GenDecl
+	lastEnumDecl     ast.Decl
 	methodsToRewrite []*ast.FuncDecl
 }
 
@@ -104,6 +106,8 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 			for _, c := range typeSpec.Comment.List {
 				if c.Text == "//#enum" {
 					enums[typeSpec.Name.Name] = &enumSpec{
+						File:       filePath,
+						Line:       fset.Position(typeSpec.Pos()).Line,
 						Package:    pkg.Name,
 						Type:       typeSpec.Name.Name,
 						Underlying: astvisit.ExprString(typeSpec.Type),
@@ -134,7 +138,7 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 			if !ok {
 				continue
 			}
-			enum.lastEnumDecl = genDecl
+			enum.lastEnumDecl = decl
 			for _, name := range valueSpec.Names {
 				enum.Enums = append(enum.Enums, name.Name)
 				// enum.EnumValues = append(enum.EnumValues, valueSpec.Values[i])
@@ -154,6 +158,12 @@ func rewriteFile(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, fileP
 					break
 				}
 			}
+		}
+	}
+
+	for _, enum := range enums {
+		if len(enum.Enums) == 0 {
+			return nil, fmt.Errorf("enum type %s.%s in %s:%d has no typed const enum values", enum.Package, enum.Type, enum.File, enum.Line)
 		}
 	}
 
