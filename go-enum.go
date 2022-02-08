@@ -314,11 +314,11 @@ var templateScanValue = template.Must(template.New("").Parse(`
 func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
 	switch x := value.(type) {
 	case string:
-		*s = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(x)
 	case []byte:
-		*s = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(x)
 	case nil:
-		*s = {{.Null}}
+		*{{.Recv}} = {{.Null}}
 	default:
 		return fmt.Errorf("can't scan SQL value of type %T as {{.Package}}.{{.Type}}", value)
 	}
