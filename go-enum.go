@@ -78,23 +78,30 @@ func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, 
 	for _, enum := range enums {
 		var methods bytes.Buffer
 		imports[`"fmt"`] = struct{}{}
-		err := templateValidValidate.Execute(&methods, enum)
+		err := methodsValidValidateTempl.Execute(&methods, enum)
 		if err != nil {
 			return nil, nil, err
 		}
 		if enum.IsNullable() {
-			err = templateIsNullIsNotNull.Execute(&methods, enum)
+			err = methodsIsNullIsNotNullTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
 			imports[`"encoding/json"`] = struct{}{}
-			err = templateMarshalJSON.Execute(&methods, enum)
+			err = methodsMarshalJSONTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
-			if enum.IsStringType() {
+			switch {
+			case enum.IsStringType():
 				imports[`"database/sql/driver"`] = struct{}{}
-				err = templateScanValue.Execute(&methods, enum)
+				err = methodsScanValueStringTempl.Execute(&methods, enum)
+				if err != nil {
+					return nil, nil, err
+				}
+			case enum.IsIntType():
+				imports[`"database/sql/driver"`] = struct{}{}
+				err = methodsScanValueIntTempl.Execute(&methods, enum)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -126,7 +133,7 @@ func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, 
 	return replacements, imports, nil
 }
 
-var templateValidValidate = template.Must(template.New("").Parse(`
+var methodsValidValidateTempl = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Valid() bool {
 	switch {{.Recv}} {
@@ -147,7 +154,7 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 }
 `))
 
-var templateIsNullIsNotNull = template.Must(template.New("").Parse(`
+var methodsIsNullIsNotNullTempl = template.Must(template.New("").Parse(`
 // IsNull returns true if {{.Recv}} is the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNull() bool {
 	return {{.Recv}} == {{.Null}}
@@ -159,7 +166,7 @@ func ({{.Recv}} {{.Type}}) IsNotNull() bool {
 }
 `))
 
-var templateScanValue = template.Must(template.New("").Parse(`
+var methodsScanValueStringTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
 	switch x := value.(type) {
@@ -184,7 +191,32 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-var templateMarshalJSON = template.Must(template.New("").Parse(`
+var methodsScanValueIntTempl = template.Must(template.New("").Parse(`
+// Scan implements the database/sql.Scanner interface for {{.Type}}
+func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
+	switch x := value.(type) {
+	case int64:
+		*{{.Recv}} = {{.Type}}(x)
+	case float64:
+		*{{.Recv}} = {{.Type}}(x)
+	case nil:
+		*{{.Recv}} = {{.Null}}
+	default:
+		return fmt.Errorf("can't scan SQL value of type %T as {{.Package}}.{{.Type}}", value)
+	}
+	return nil
+}
+
+// Value implements the driver database/sql/driver.Valuer interface for {{.Type}}
+func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
+	if {{.Recv}} == {{.Null}} {
+		return nil, nil
+	}
+	return int64({{.Recv}}), nil
+}
+`))
+
+var methodsMarshalJSONTempl = template.Must(template.New("").Parse(`
 // MarshalJSON implements encoding/json.Marshaler for {{.Type}}
 // by returning the JSON null value for an empty (null) string.
 func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {

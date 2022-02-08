@@ -28,6 +28,22 @@ func (e *Enum) IsStringType() bool {
 	return e.Underlying == "string"
 }
 
+func (e *Enum) IsIntType() bool {
+	if strings.HasPrefix(e.Underlying, "int") {
+		switch e.Underlying {
+		case "int", "int8", "int16", "int32", "int64":
+			return true
+		}
+	}
+	if strings.HasPrefix(e.Underlying, "uint") {
+		switch e.Underlying {
+		case "uint", "uint8", "uint16", "uint32", "uint64":
+			return true
+		}
+	}
+	return e.Underlying == "byte"
+}
+
 func (e *Enum) IsNullable() bool {
 	return e.Null != ""
 }
