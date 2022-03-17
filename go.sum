@@ -1,5 +1,5 @@
-github.com/ungerik/go-astvisit v0.0.0-20220208104635-b8992cbf8df1 h1:lcqteFuARG+CCtznrlOId8oCHEzUCZWee6/gx3IiT90=
-github.com/ungerik/go-astvisit v0.0.0-20220208104635-b8992cbf8df1/go.mod h1:E0bWVU7aWQqYqZX945iL4CEloZQmkMiVTcIJw6RP3PI=
+github.com/ungerik/go-astvisit v0.0.0-20220317123017-e5279ac0952d h1:pdpGQaxqufVY5jBXcI9hw2l4+ebp5igMKm/zVgPOwC0=
+github.com/ungerik/go-astvisit v0.0.0-20220317123017-e5279ac0952d/go.mod h1:dHZfG67+81PzPsDc0qw8DeFPCVE1kOrFmF0afCvfIvs=
 golang.org/x/mod v0.6.0-dev.0.20220106191415-9b9b3d81d5e3 h1:kQgndtyPBW/JIYERgdxfwMYh3AVStj88WQTlNDi2a+o=
 golang.org/x/mod v0.6.0-dev.0.20220106191415-9b9b3d81d5e3/go.mod h1:3p9vT2HGsQu2K1YbXdKPJLVgG5VJdoTa1poYQBtP1AY=
 golang.org/x/sys v0.0.0-20220317061510-51cd9980dadf h1:Fm4IcnUL803i92qDlmB0obyHmosDrxZWxJL3gIeNqOw=
