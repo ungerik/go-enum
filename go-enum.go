@@ -168,7 +168,7 @@ func ({{.Recv}} {{.Type}}) IsNotNull() bool {
 
 var methodsScanValueStringTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
-func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
+func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch x := value.(type) {
 	case string:
 		*{{.Recv}} = {{.Type}}(x)
@@ -193,7 +193,7 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 
 var methodsScanValueIntTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
-func ({{.Recv}} *{{.Type}}) Scan(value interface{}) error {
+func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch x := value.(type) {
 	case int64:
 		*{{.Recv}} = {{.Type}}(x)
