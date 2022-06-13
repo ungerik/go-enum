@@ -145,7 +145,7 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 		switch funcDecl.Name.Name {
 		case "Valid", "Validate":
 			enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-		case "IsNull", "IsNotNull", "MarshalJSON":
+		case "IsNull", "IsNotNull", "SetNull", "MarshalJSON":
 			if enum.IsNullable() {
 				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 			}

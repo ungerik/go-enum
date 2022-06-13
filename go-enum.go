@@ -83,12 +83,12 @@ func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, 
 			return nil, nil, err
 		}
 		if enum.IsNullable() {
-			err = methodsIsNullIsNotNullTempl.Execute(&methods, enum)
+			err = nullableMethodsTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
 			imports[`"encoding/json"`] = struct{}{}
-			err = methodsMarshalJSONTempl.Execute(&methods, enum)
+			err = marshalJSONMethodsTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -154,7 +154,7 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 }
 `))
 
-var methodsIsNullIsNotNullTempl = template.Must(template.New("").Parse(`
+var nullableMethodsTempl = template.Must(template.New("").Parse(`
 // IsNull returns true if {{.Recv}} is the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNull() bool {
 	return {{.Recv}} == {{.Null}}
@@ -163,6 +163,11 @@ func ({{.Recv}} {{.Type}}) IsNull() bool {
 // IsNotNull returns true if {{.Recv}} is not the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNotNull() bool {
 	return {{.Recv}} != {{.Null}}
+}
+
+// SetNull sets the null value {{.Null}} at {{.Recv}}
+func ({{.Recv}} *{{.Type}}) SetNull() {
+	*{{.Recv}} = {{.Null}}
 }
 `))
 
@@ -216,7 +221,7 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-var methodsMarshalJSONTempl = template.Must(template.New("").Parse(`
+var marshalJSONMethodsTempl = template.Must(template.New("").Parse(`
 // MarshalJSON implements encoding/json.Marshaler for {{.Type}}
 // by returning the JSON null value for an empty (null) string.
 func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
