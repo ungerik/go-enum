@@ -190,7 +190,7 @@ func ({{.Recv}} *{{.Type}}) UnmarshalJSON(j []byte) error {
 		*{{.Recv}} = {{.Null}}
 		return nil
 	}
-	return json.Unmarshal(j, {{.Recv}})
+	return json.Unmarshal(j, (*{{.Underlying}})({{.Recv}}))
 }
 `))
 
