@@ -78,30 +78,33 @@ func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, 
 	for _, enum := range enums {
 		var methods bytes.Buffer
 		imports[`"fmt"`] = struct{}{}
-		err := methodsValidValidateTempl.Execute(&methods, enum)
+		err := validateMethodsTempl.Execute(&methods, enum)
 		if err != nil {
 			return nil, nil, err
 		}
-		if enum.IsNullable() {
-			err = nullableMethodsTempl.Execute(&methods, enum)
+		if enum.IsStringType() {
+			err = stringMethodsTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		if enum.IsNullable() {
+			imports[`"bytes"`] = struct{}{}
 			imports[`"encoding/json"`] = struct{}{}
-			err = marshalJSONMethodsTempl.Execute(&methods, enum)
+			err = nullableMethodsTempl.Execute(&methods, enum)
 			if err != nil {
 				return nil, nil, err
 			}
 			switch {
 			case enum.IsStringType():
 				imports[`"database/sql/driver"`] = struct{}{}
-				err = methodsScanValueStringTempl.Execute(&methods, enum)
+				err = nullableStringMethodsTempl.Execute(&methods, enum)
 				if err != nil {
 					return nil, nil, err
 				}
 			case enum.IsIntType():
 				imports[`"database/sql/driver"`] = struct{}{}
-				err = methodsScanValueIntTempl.Execute(&methods, enum)
+				err = nullableIntMethodsTempl.Execute(&methods, enum)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -133,7 +136,8 @@ func fileReplacements(fset *token.FileSet, pkg *ast.Package, astFile *ast.File, 
 	return replacements, imports, nil
 }
 
-var methodsValidValidateTempl = template.Must(template.New("").Parse(`
+// validateMethodsTempl provides the methods: Valid, Validate
+var validateMethodsTempl = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Valid() bool {
 	switch {{.Recv}} {
@@ -154,6 +158,7 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 }
 `))
 
+// nullableMethodsTempl provides the methods: IsNull, IsNotNull, SetNull, MarshalJSON, UnmarshalJSON
 var nullableMethodsTempl = template.Must(template.New("").Parse(`
 // IsNull returns true if {{.Recv}} is the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNull() bool {
@@ -169,9 +174,36 @@ func ({{.Recv}} {{.Type}}) IsNotNull() bool {
 func ({{.Recv}} *{{.Type}}) SetNull() {
 	*{{.Recv}} = {{.Null}}
 }
+
+// MarshalJSON implements encoding/json.Marshaler for {{.Type}}
+// by returning the JSON null value for {{.Null}}.
+func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
+	if {{.Recv}} == {{.Null}} {
+		return []byte("null"), nil
+	}
+	return json.Marshal({{.Underlying}}({{.Recv}}))
+}
+
+// UnmarshalJSON implements encoding/json.Unmarshaler
+func ({{.Recv}} *{{.Type}}) UnmarshalJSON(j []byte) error {
+	if bytes.Equal(j, []byte("null")) {
+		*{{.Recv}} = {{.Null}}
+		return nil
+	}
+	return json.Unmarshal(j, {{.Recv}})
+}
 `))
 
-var methodsScanValueStringTempl = template.Must(template.New("").Parse(`
+// stringMethodsTempl provides the methods: String
+var stringMethodsTempl = template.Must(template.New("").Parse(`
+// String implements the fmt.Stringer interface for {{.Type}}
+func ({{.Recv}} {{.Type}}) String() string {
+	return string({{.Recv}})
+}
+`))
+
+// nullableStringMethodsTempl provides the methods: Scan, Value
+var nullableStringMethodsTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch x := value.(type) {
@@ -196,7 +228,8 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-var methodsScanValueIntTempl = template.Must(template.New("").Parse(`
+// nullableIntMethodsTempl provides the methods: Scan, Value
+var nullableIntMethodsTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch x := value.(type) {
@@ -218,16 +251,5 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return int64({{.Recv}}), nil
-}
-`))
-
-var marshalJSONMethodsTempl = template.Must(template.New("").Parse(`
-// MarshalJSON implements encoding/json.Marshaler for {{.Type}}
-// by returning the JSON null value for an empty (null) string.
-func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
-	if {{.Recv}} == {{.Null}} {
-		return []byte("null"), nil
-	}
-	return json.Marshal({{.Underlying}}({{.Recv}}))
 }
 `))

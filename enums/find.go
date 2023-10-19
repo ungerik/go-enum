@@ -29,19 +29,14 @@ func (e *Enum) IsStringType() bool {
 }
 
 func (e *Enum) IsIntType() bool {
-	if strings.HasPrefix(e.Underlying, "int") {
-		switch e.Underlying {
-		case "int", "int8", "int16", "int32", "int64":
-			return true
-		}
+	switch e.Underlying {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"byte":
+		return true
+	default:
+		return false
 	}
-	if strings.HasPrefix(e.Underlying, "uint") {
-		switch e.Underlying {
-		case "uint", "uint8", "uint16", "uint32", "uint64":
-			return true
-		}
-	}
-	return e.Underlying == "byte"
 }
 
 func (e *Enum) IsNullable() bool {
@@ -145,12 +140,16 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 		switch funcDecl.Name.Name {
 		case "Valid", "Validate":
 			enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-		case "IsNull", "IsNotNull", "SetNull", "MarshalJSON":
+		case "String":
+			if enum.IsStringType() {
+				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
+			}
+		case "IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON":
 			if enum.IsNullable() {
 				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 			}
 		case "Scan", "Value":
-			if enum.IsNullable() && enum.IsStringType() {
+			if enum.IsNullable() {
 				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 			}
 		}
