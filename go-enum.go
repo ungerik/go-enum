@@ -206,11 +206,11 @@ func ({{.Recv}} {{.Type}}) String() string {
 var nullableStringMethodsTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
-	switch x := value.(type) {
+	switch value := value.(type) {
 	case string:
-		*{{.Recv}} = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(value)
 	case []byte:
-		*{{.Recv}} = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(value)
 	case nil:
 		*{{.Recv}} = {{.Null}}
 	default:
@@ -232,11 +232,11 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 var nullableIntMethodsTempl = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
-	switch x := value.(type) {
+	switch value := value.(type) {
 	case int64:
-		*{{.Recv}} = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(value)
 	case float64:
-		*{{.Recv}} = {{.Type}}(x)
+		*{{.Recv}} = {{.Type}}(value)
 	case nil:
 		*{{.Recv}} = {{.Null}}
 	default:
