@@ -136,9 +136,11 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 		if !ok {
 			continue
 		}
-		enum.Recv = recv.Names[0].Name
+		if len(recv.Names) > 0 {
+			enum.Recv = recv.Names[0].Name
+		}
 		switch funcDecl.Name.Name {
-		case "Valid", "Validate":
+		case "Valid", "Validate", "Enums", "EnumStrings":
 			enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 		case "String":
 			if enum.IsStringType() {
