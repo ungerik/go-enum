@@ -140,9 +140,9 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 `))
 
 var JSONSchemaMethod = template.Must(template.New("").Parse(`
-// JSONSchema implements the jsonschema.Schema interface for {{.Type}}
-func ({{.Type}}) JSONSchema() jsonschema.Schema {
-	return jsonschema.Schema{
+// JSONSchema returns a github.com/invopop/jsonschema.Schema for {{.Type}}
+func ({{.Type}}) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
 		{{if .IsNullable}}OneOf: []*jsonschema.Schema{
 			{
 				Type: "{{.JSONType}}",
