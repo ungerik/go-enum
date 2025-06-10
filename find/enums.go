@@ -1,24 +1,27 @@
-package enums
+package find
 
 import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"slices"
 	"strings"
 
 	"github.com/ungerik/go-astvisit"
 )
 
 type Enum struct {
-	File       string
-	Line       int
-	Package    string
-	Type       string
-	Underlying string
-	Recv       string
-	Enums      []string
-	Literals   []string
-	Null       string
+	File           string
+	Line           int
+	Package        string
+	Type           string
+	Underlying     string
+	Recv           string
+	Enums          []string
+	Literals       []string
+	JSONSchemaEnum []string
+	Null           string
+	JSONSchema     bool
 
 	LastEnumDecl ast.Decl
 	KnownMethods []*ast.FuncDecl
@@ -29,14 +32,9 @@ func (e *Enum) IsStringType() bool {
 }
 
 func (e *Enum) IsIntType() bool {
-	switch e.Underlying {
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64",
-		"byte":
-		return true
-	default:
-		return false
-	}
+	return e.Underlying == "byte" ||
+		strings.HasPrefix(e.Underlying, "int") ||
+		strings.HasPrefix(e.Underlying, "uint")
 }
 
 func (e *Enum) IsNullable() bool {
@@ -47,7 +45,24 @@ func (e *Enum) LastIndex() int {
 	return len(e.Enums) - 1
 }
 
-func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]*Enum, error) {
+func (e *Enum) JSONType() string {
+	switch {
+	case e.IsStringType(), e.Underlying == "time.Time":
+		return "string"
+	case e.IsIntType(), strings.HasPrefix(e.Underlying, "float"):
+		return "number"
+	case e.Underlying == "bool":
+		return "boolean"
+	case strings.HasPrefix(e.Underlying, "[]"):
+		return "array"
+	case strings.HasPrefix(e.Underlying, "map["), strings.HasPrefix(e.Underlying, "struct{"):
+		return "object"
+	default:
+		return "string"
+	}
+}
+
+func Enums(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]*Enum, error) {
 	// Find enum types
 	enums := make(map[string]*Enum)
 	for _, decl := range astFile.Decls {
@@ -61,13 +76,15 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 				continue
 			}
 			for _, c := range typeSpec.Comment.List {
-				if c.Text == "//#enum" {
+				parts := strings.Split(c.Text, ",")
+				if len(parts) > 0 && parts[0] == "//#enum" {
 					enums[typeSpec.Name.Name] = &Enum{
 						File:       astFile.Name.Name,
 						Line:       fset.Position(typeSpec.Pos()).Line,
 						Package:    pkg.Name,
 						Type:       typeSpec.Name.Name,
 						Underlying: astvisit.ExprString(typeSpec.Type),
+						JSONSchema: slices.Contains(parts, "jsonschema"),
 					}
 					break
 				}
@@ -99,6 +116,11 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 			for i, name := range valueSpec.Names {
 				enum.Enums = append(enum.Enums, name.Name)
 				enum.Literals = append(enum.Literals, astvisit.ExprString(valueSpec.Values[i]))
+				if enum.Underlying == "string" || enum.Underlying == "int" {
+					enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, astvisit.ExprString(valueSpec.Values[i]))
+				} else {
+					enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, fmt.Sprintf("%s(%s)", enum.Underlying, astvisit.ExprString(valueSpec.Values[i])))
+				}
 			}
 			if valueSpec.Comment != nil {
 				for _, c := range valueSpec.Comment.List {
@@ -152,6 +174,10 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 			}
 		case "Scan", "Value":
 			if enum.IsNullable() {
+				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
+			}
+		case "JSONSchema":
+			if enum.JSONSchema {
 				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 			}
 		}
