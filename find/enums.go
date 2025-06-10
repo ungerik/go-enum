@@ -113,15 +113,7 @@ func Enums(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string
 				continue
 			}
 			enum.LastEnumDecl = decl
-			for i, name := range valueSpec.Names {
-				enum.Enums = append(enum.Enums, name.Name)
-				enum.Literals = append(enum.Literals, astvisit.ExprString(valueSpec.Values[i]))
-				if enum.Underlying == "string" || enum.Underlying == "int" {
-					enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, astvisit.ExprString(valueSpec.Values[i]))
-				} else {
-					enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, fmt.Sprintf("%s(%s)", enum.Underlying, astvisit.ExprString(valueSpec.Values[i])))
-				}
-			}
+			isNullValue := false
 			if valueSpec.Comment != nil {
 				for _, c := range valueSpec.Comment.List {
 					if c.Text != "//#null" {
@@ -134,7 +126,21 @@ func Enums(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string
 						return nil, fmt.Errorf("cant use //#null for multiple enums: %#v", valueSpec.Names)
 					}
 					enum.Null = valueSpec.Names[0].Name
+					isNullValue = true
 					break
+				}
+			}
+			for i, name := range valueSpec.Names {
+				enum.Enums = append(enum.Enums, name.Name)
+				enum.Literals = append(enum.Literals, astvisit.ExprString(valueSpec.Values[i]))
+				// Only add non-null values to JSONSchemaEnum because null is another oneOf type variant
+				if !isNullValue {
+					if enum.Underlying == "string" || enum.Underlying == "int" {
+						enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, astvisit.ExprString(valueSpec.Values[i]))
+					} else {
+						// Value literal type does not default to underlying type
+						enum.JSONSchemaEnum = append(enum.JSONSchemaEnum, fmt.Sprintf("%s(%s)", enum.Underlying, astvisit.ExprString(valueSpec.Values[i])))
+					}
 				}
 			}
 		}
