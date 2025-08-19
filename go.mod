@@ -2,8 +2,6 @@ module github.com/ungerik/go-enum
 
 go 1.23.0
 
-toolchain go1.24.4
-
 require github.com/ungerik/go-astvisit v0.0.0-20250122155250-e994358a002f
 
 require (
