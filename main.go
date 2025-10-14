@@ -1,3 +1,66 @@
+/*
+go-enum is a code generator for type-safe enums in Go.
+
+It scans Go source files for enum type definitions marked with the //#enum comment
+and automatically generates validation, conversion, and utility methods.
+
+# Usage
+
+	go-enum [options] [path]
+
+# Options
+
+	-verbose    Print information about what's happening
+	-debug      Insert debug comments in generated code
+	-print      Print generated code to stdout instead of writing files
+	-help       Show help message
+
+# Enum Definition
+
+Mark a type as an enum with the //#enum comment:
+
+	//#enum
+	type Status string
+
+	const (
+		StatusPending Status = "pending"
+		StatusActive  Status = "active"
+	)
+
+# Generated Methods
+
+For all enums:
+  - Valid() bool - Checks if value is valid
+  - Validate() error - Returns error if invalid
+  - Enums() []T - Returns all enum values
+  - EnumStrings() []string - Returns all values as strings
+
+For string enums:
+  - String() string - Implements fmt.Stringer
+
+For nullable enums (marked with //#null):
+  - IsNull() bool
+  - IsNotNull() bool
+  - SetNull()
+  - MarshalJSON/UnmarshalJSON
+  - Scan/Value for database/sql
+
+For enums with ,jsonschema flag:
+  - JSONSchema() *jsonschema.Schema
+
+# Example
+
+	//go:generate go-enum
+
+	//#enum
+	type Priority int
+
+	const (
+		PriorityNull Priority = 0 //#null
+		PriorityLow  Priority = 1
+		PriorityHigh Priority = 2
+	)
+*/
 package main
 
 import (
