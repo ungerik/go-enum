@@ -1,16 +1,10 @@
-/*
-Package templates provides Go code templates for generating enum methods.
-
-Each template generates specific methods for enum types based on their
-characteristics (string/int type, nullable, JSON schema support).
-*/
-package templates
+package enums
 
 import "text/template"
 
-// ValidateMethods provides the methods: Valid, Validate
+// validateMethodsTemplate provides the methods: Valid, Validate
 // These methods are generated for all enum types.
-var ValidateMethods = template.Must(template.New("").Parse(`
+var validateMethodsTemplate = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Valid() bool {
 	switch {{.Recv}} {
@@ -31,9 +25,9 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 }
 `))
 
-// NullableMethods provides the methods: IsNull, IsNotNull, SetNull, MarshalJSON, UnmarshalJSON
+// nullableMethodsTemplate provides the methods: IsNull, IsNotNull, SetNull, MarshalJSON, UnmarshalJSON
 // These methods are generated for enum types with a null value (marked with //#null).
-var NullableMethods = template.Must(template.New("").Parse(`
+var nullableMethodsTemplate = template.Must(template.New("").Parse(`
 // IsNull returns true if {{.Recv}} is the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNull() bool {
 	return {{.Recv}} == {{.Null}}
@@ -68,18 +62,18 @@ func ({{.Recv}} *{{.Type}}) UnmarshalJSON(j []byte) error {
 }
 `))
 
-// StringMethods provides the String method that implements fmt.Stringer.
+// stringMethodsTemplate provides the String method that implements fmt.Stringer.
 // Generated only for string-based enum types.
-var StringMethods = template.Must(template.New("").Parse(`
+var stringMethodsTemplate = template.Must(template.New("").Parse(`
 // String implements the fmt.Stringer interface for {{.Type}}
 func ({{.Recv}} {{.Type}}) String() string {
 	return string({{.Recv}})
 }
 `))
 
-// EnumsMethods provides the methods: Enums, EnumStrings
+// enumsMethodsTemplate provides the methods: Enums, EnumStrings
 // These methods return all valid enum values as a slice.
-var EnumsMethods = template.Must(template.New("").Parse(`
+var enumsMethodsTemplate = template.Must(template.New("").Parse(`
 // Enums returns all valid values for {{.Type}}
 func ({{.Type}}) Enums() []{{.Type}} {
 	return []{{.Type}}{
@@ -98,9 +92,9 @@ func ({{.Type}}) EnumStrings() []string {
 }
 `))
 
-// NullableStringMethods provides database/sql Scanner and Valuer methods for nullable string enums.
+// nullableStringMethodsTemplate provides database/sql Scanner and Valuer methods for nullable string enums.
 // Generated for nullable string-based enum types.
-var NullableStringMethods = template.Must(template.New("").Parse(`
+var nullableStringMethodsTemplate = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch value := value.(type) {
@@ -125,9 +119,9 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-// NullableIntMethods provides database/sql Scanner and Valuer methods for nullable integer enums.
+// nullableIntMethodsTemplate provides database/sql Scanner and Valuer methods for nullable integer enums.
 // Generated for nullable integer-based enum types.
-var NullableIntMethods = template.Must(template.New("").Parse(`
+var nullableIntMethodsTemplate = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch value := value.(type) {
@@ -152,10 +146,10 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-// JSONSchemaMethod provides the JSONSchema method for generating JSON Schema definitions.
+// jsonSchemaMethodTemplate provides the JSONSchema method for generating JSON Schema definitions.
 // Generated for enum types with the ,jsonschema flag.
 // Supports both nullable and non-nullable enums.
-var JSONSchemaMethod = template.Must(template.New("").Parse(`
+var jsonSchemaMethodTemplate = template.Must(template.New("").Parse(`
 // JSONSchema returns a github.com/invopop/jsonschema.Schema for {{.Type}}
 func ({{.Type}}) JSONSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{
