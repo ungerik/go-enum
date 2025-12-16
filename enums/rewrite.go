@@ -2,9 +2,11 @@ package enums
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/token"
 	"io"
+	"os"
 
 	"github.com/ungerik/go-astvisit"
 )
@@ -25,7 +27,29 @@ import (
 //   - resultOut: Writer for generated code output (nil to write to files)
 //   - debug: If true, inserts debug comments in generated code
 func Rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool) error {
-	return astvisit.RewriteWithReplacements(
+	return rewrite(path, verboseOut, resultOut, debug, false)
+}
+
+// ValidateRewrite checks if enum methods are missing or outdated without modifying files.
+//
+// It scans Go source files at the given path for enum type definitions and checks
+// if the generated methods would differ from the current file contents.
+// Any missing or outdated methods are reported to stderr.
+//
+// Parameters:
+//   - path: Directory or file path to process (defaults to current directory)
+//   - verboseOut: Writer for verbose progress output (nil to disable)
+//   - debug: If true, inserts debug comments in generated code
+//
+// Returns an error if any enum methods are missing or outdated.
+func ValidateRewrite(path string, verboseOut io.Writer, debug bool) error {
+	return rewrite(path, verboseOut, nil, debug, true)
+}
+
+func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool, validate bool) error {
+	var validationErrors []string
+
+	err := astvisit.RewriteWithReplacements(
 		path,
 		verboseOut,
 		resultOut,
@@ -115,7 +139,60 @@ func Rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool)
 				}
 			}
 
+			// In validation mode, check if replacements would actually change the file
+			if validate && len(replacements) > 0 {
+				// Read original source
+				source, err := os.ReadFile(filePath)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				// Apply replacements to see if file would change
+				rewritten, err := replacements.Apply(fset, source)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				// Apply formatting with imports
+				rewritten, err = astvisit.FormatFileWithImports(fset, rewritten, imports)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				// Check if the content actually changed
+				if !bytes.Equal(source, rewritten) {
+					// File would change - report as validation error
+					for _, repl := range replacements {
+						var pos token.Position
+						if repl.Node != nil {
+							pos = fset.Position(repl.Node.Pos())
+						}
+						desc := repl.DebugID
+						if desc == "" {
+							desc = "enum methods"
+						}
+						validationErrors = append(validationErrors, fmt.Sprintf("%s: missing or outdated %s", pos, desc))
+					}
+				}
+
+				// Return nil to prevent file modification in validate mode
+				return nil, nil, nil
+			}
+
 			return replacements, imports, nil
 		},
 	)
+	if err != nil {
+		return err
+	}
+
+	// In validation mode, report errors and fail if any were found
+	if validate && len(validationErrors) > 0 {
+		for _, errMsg := range validationErrors {
+			fmt.Fprintln(os.Stderr, errMsg)
+		}
+		return fmt.Errorf("found %d missing or outdated enum method(s)", len(validationErrors))
+	}
+
+	return nil
 }

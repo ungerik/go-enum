@@ -14,7 +14,15 @@ manipulation provided by github.com/ungerik/go-astvisit.
 	-verbose    Print information about what's happening
 	-debug      Insert debug comments in generated code
 	-print      Print generated code to stdout instead of writing files
+	-validate   Check for missing or outdated enum methods without modifying files.
+	            Reports issues to stderr and exits with code 1 if any are found.
+	            Useful for CI validation to ensure all enums have up-to-date methods.
 	-help       Show help message
+
+# Exit Codes
+
+	0   Success (no issues found in validate mode, or generation completed successfully)
+	1   Error occurred (validation failed, file not found, invalid syntax, etc.)
 
 # Enum Definition
 
@@ -75,6 +83,7 @@ var (
 	verbose   bool
 	debug     bool
 	printOnly bool
+	validate  bool
 	printHelp bool
 )
 
@@ -82,6 +91,7 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "prints information to stdout of what's happening")
 	flag.BoolVar(&debug, "debug", false, "inserts debug information")
 	flag.BoolVar(&printOnly, "print", false, "prints to stdout instead of writing files")
+	flag.BoolVar(&validate, "validate", false, "check for missing or outdated enum methods without modifying files")
 	flag.BoolVar(&printHelp, "help", false, "prints this help output")
 	flag.Parse()
 	if printHelp {
@@ -103,7 +113,13 @@ func main() {
 	if printOnly {
 		resultOut = os.Stdout
 	}
-	err := enums.Rewrite(path, verboseOut, resultOut, debug)
+
+	var err error
+	if validate {
+		err = enums.ValidateRewrite(path, verboseOut, debug)
+	} else {
+		err = enums.Rewrite(path, verboseOut, resultOut, debug)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "go-enum error:", err)
 		os.Exit(1)

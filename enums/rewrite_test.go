@@ -598,3 +598,444 @@ const (
 	// Should add jsonschema import
 	assert.Contains(t, result, `"github.com/invopop/jsonschema"`)
 }
+
+func TestValidateRewrite_MissingMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// Enum without generated methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Run ValidateRewrite - should fail
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
+
+func TestValidateRewrite_UpToDateMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// First generate the methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Generate methods
+	err = Rewrite(tmpDir, nil, nil, false)
+	require.NoError(t, err)
+
+	// Now validate - should succeed
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.NoError(t, err)
+}
+
+func TestValidateRewrite_OutdatedMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// Enum with outdated methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+
+func (s Status) Valid() bool {
+	// Old implementation - only checks for pending
+	return s == StatusPending
+}
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Run ValidateRewrite - should fail because method is outdated
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
+
+func TestValidateRewrite_NoEnums(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "plain.go")
+
+	// File without enums
+	source := `package example
+
+type Status string
+
+const (
+	StatusPending Status = "pending"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Run ValidateRewrite - should succeed (no enums to validate)
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.NoError(t, err)
+}
+
+func TestValidateRewrite_DoesNotModifyFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// Enum without generated methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Run ValidateRewrite - should fail but not modify file
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err)
+
+	// Read file back - should be unchanged
+	content, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+	assert.Equal(t, source, string(content), "ValidateRewrite should not modify files")
+}
+
+func TestValidateRewrite_MultipleEnums(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "types.go")
+
+	// Multiple enums, one with methods, one without
+	source := `package example
+
+import "fmt"
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+
+func (s Status) Valid() bool {
+	switch s {
+	case StatusPending, StatusActive:
+		return true
+	}
+	return false
+}
+
+func (s Status) Validate() error {
+	if !s.Valid() {
+		return fmt.Errorf("invalid example.Status: %q", s)
+	}
+	return nil
+}
+
+func (Status) Enums() []Status {
+	return []Status{StatusPending, StatusActive}
+}
+
+func (Status) EnumStrings() []string {
+	return []string{"pending", "active"}
+}
+
+func (s Status) String() string {
+	return string(s)
+}
+
+type Priority int //#enum
+
+const (
+	PriorityLow  Priority = 1
+	PriorityHigh Priority = 2
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Run ValidateRewrite - should fail because Priority is missing methods
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
+
+func TestValidateRewrite_VerboseOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	var verbose bytes.Buffer
+	err = ValidateRewrite(tmpDir, &verbose, false)
+	require.Error(t, err)
+
+	verboseStr := verbose.String()
+	// Verbose output should contain useful information
+	assert.NotEmpty(t, verboseStr)
+}
+
+func TestValidateRewrite_OutdatedAfterAddingEnumValue(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// First, create enum with 2 values and generate methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Generate methods
+	err = Rewrite(tmpDir, nil, nil, false)
+	require.NoError(t, err)
+
+	// Validate - should pass
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.NoError(t, err, "validation should pass after initial generation")
+
+	// Now add a third enum value
+	sourceWithNewValue := `package example
+
+import "fmt"
+
+type Status string //#enum
+
+const (
+	StatusPending   Status = "pending"
+	StatusActive    Status = "active"
+	StatusCompleted Status = "completed"
+)
+
+func (s Status) Valid() bool {
+	switch s {
+	case StatusPending, StatusActive:
+		return true
+	}
+	return false
+}
+
+func (s Status) Validate() error {
+	if !s.Valid() {
+		return fmt.Errorf("invalid example.Status: %q", s)
+	}
+	return nil
+}
+
+func (Status) Enums() []Status {
+	return []Status{StatusPending, StatusActive}
+}
+
+func (Status) EnumStrings() []string {
+	return []string{"pending", "active"}
+}
+
+func (s Status) String() string {
+	return string(s)
+}
+`
+
+	err = os.WriteFile(testFile, []byte(sourceWithNewValue), 0644)
+	require.NoError(t, err)
+
+	// Validate - should now fail because methods don't include StatusCompleted
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err, "validation should fail when new enum value is added but methods aren't updated")
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
+
+func TestValidateRewrite_OutdatedAfterChangingEnumValue(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// First, create enum and generate methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Generate methods
+	err = Rewrite(tmpDir, nil, nil, false)
+	require.NoError(t, err)
+
+	// Validate - should pass
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.NoError(t, err, "validation should pass after initial generation")
+
+	// Now change one of the enum values
+	sourceWithChangedValue := `package example
+
+import "fmt"
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "running"
+)
+
+func (s Status) Valid() bool {
+	switch s {
+	case StatusPending, StatusActive:
+		return true
+	}
+	return false
+}
+
+func (s Status) Validate() error {
+	if !s.Valid() {
+		return fmt.Errorf("invalid example.Status: %q", s)
+	}
+	return nil
+}
+
+func (Status) Enums() []Status {
+	return []Status{StatusPending, StatusActive}
+}
+
+func (Status) EnumStrings() []string {
+	return []string{"pending", "active"}
+}
+
+func (s Status) String() string {
+	return string(s)
+}
+`
+
+	err = os.WriteFile(testFile, []byte(sourceWithChangedValue), 0644)
+	require.NoError(t, err)
+
+	// Validate - should fail because EnumStrings still has "active" instead of "running"
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err, "validation should fail when enum value is changed but methods aren't updated")
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
+
+func TestValidateRewrite_OutdatedAfterRemovingEnumValue(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// First, create enum with 3 values and generate methods
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending   Status = "pending"
+	StatusActive    Status = "active"
+	StatusCompleted Status = "completed"
+)
+`
+
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+
+	// Generate methods
+	err = Rewrite(tmpDir, nil, nil, false)
+	require.NoError(t, err)
+
+	// Validate - should pass
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.NoError(t, err, "validation should pass after initial generation")
+
+	// Now remove one enum value
+	sourceWithRemovedValue := `package example
+
+import "fmt"
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+
+func (s Status) Valid() bool {
+	switch s {
+	case StatusPending, StatusActive, StatusCompleted:
+		return true
+	}
+	return false
+}
+
+func (s Status) Validate() error {
+	if !s.Valid() {
+		return fmt.Errorf("invalid example.Status: %q", s)
+	}
+	return nil
+}
+
+func (Status) Enums() []Status {
+	return []Status{StatusPending, StatusActive, StatusCompleted}
+}
+
+func (Status) EnumStrings() []string {
+	return []string{"pending", "active", "completed"}
+}
+
+func (s Status) String() string {
+	return string(s)
+}
+`
+
+	err = os.WriteFile(testFile, []byte(sourceWithRemovedValue), 0644)
+	require.NoError(t, err)
+
+	// Validate - should fail because methods still reference StatusCompleted
+	err = ValidateRewrite(tmpDir, nil, false)
+	require.Error(t, err, "validation should fail when enum value is removed but methods aren't updated")
+	assert.Contains(t, err.Error(), "missing or outdated enum method")
+}
