@@ -139,40 +139,48 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 				}
 			}
 
-			// In validation mode, check if replacements would actually change the file
-			if validate && len(replacements) > 0 {
-				// Read original source
+			// Drop replacements when they produce no semantic change. Both
+			// the source and the rewritten output are normalized via
+			// FormatFileWithImports before comparison so that purely
+			// cosmetic differences (import reordering, whitespace) cancel
+			// out instead of being reported as missing/outdated methods.
+			// Dropping the replacements when nothing changes also avoids
+			// rewriting the file in normal mode, so a file with already
+			// up-to-date methods stays byte-identical even when its imports
+			// were not in the order goimports would produce.
+			if len(replacements) > 0 {
 				source, err := os.ReadFile(filePath)
 				if err != nil {
 					return nil, nil, err
 				}
-
-				// Apply replacements to see if file would change
 				rewritten, err := replacements.Apply(fset, source)
 				if err != nil {
 					return nil, nil, err
 				}
-
-				// Apply formatting with imports
-				rewritten, err = astvisit.FormatFileWithImports(fset, rewritten, imports)
+				formattedSource, err := astvisit.FormatFileWithImports(fset, source, imports)
 				if err != nil {
 					return nil, nil, err
 				}
+				formattedRewritten, err := astvisit.FormatFileWithImports(fset, rewritten, imports)
+				if err != nil {
+					return nil, nil, err
+				}
+				if bytes.Equal(formattedSource, formattedRewritten) {
+					replacements = nil
+				}
+			}
 
-				// Check if the content actually changed
-				if !bytes.Equal(source, rewritten) {
-					// File would change - report as validation error
-					for _, repl := range replacements {
-						var pos token.Position
-						if repl.Node != nil {
-							pos = fset.Position(repl.Node.Pos())
-						}
-						desc := repl.DebugID
-						if desc == "" {
-							desc = "enum methods"
-						}
-						validationErrors = append(validationErrors, fmt.Sprintf("%s: missing or outdated %s", pos, desc))
+			if validate {
+				for _, repl := range replacements {
+					var pos token.Position
+					if repl.Node != nil {
+						pos = fset.Position(repl.Node.Pos())
 					}
+					desc := repl.DebugID
+					if desc == "" {
+						desc = "enum methods"
+					}
+					validationErrors = append(validationErrors, fmt.Sprintf("%s: missing or outdated %s", pos, desc))
 				}
 
 				// Return nil to prevent file modification in validate mode

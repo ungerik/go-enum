@@ -1039,3 +1039,59 @@ func (s Status) String() string {
 	require.Error(t, err, "validation should fail when enum value is removed but methods aren't updated")
 	assert.Contains(t, err.Error(), "missing or outdated enum method")
 }
+
+// TestRewriteNoOpDoesNotReorderImports verifies that running Rewrite on a
+// file whose enum methods are already up to date does NOT modify the file —
+// even when the file's imports are not in the order goimports would produce.
+// Import ordering belongs to gofmt/goimports, not to the enum generator.
+//
+// Regression test: previously, even a no-op enum rewrite would unconditionally
+// run FormatFileWithImports, which reorders imports as a side effect.
+func TestRewriteNoOpDoesNotReorderImports(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// Generate methods first so the file has up-to-date enum methods.
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusPending Status = "pending"
+	StatusActive  Status = "active"
+)
+`
+	err := os.WriteFile(testFile, []byte(source), 0644)
+	require.NoError(t, err)
+	require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+
+	// Read the freshly-generated file, then deliberately scramble its
+	// import order so it is no longer goimports-sorted.
+	generated, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+
+	// Replace the generated import block with an intentionally unsorted one.
+	// `fmt` should sort before any third-party import alphabetically; we put
+	// a third-party import before it, then add an unused alias to ensure the
+	// imports group is non-trivial. Use only stdlib imports to avoid needing
+	// extra deps in the test module.
+	scrambled := bytes.Replace(
+		generated,
+		[]byte(`import "fmt"`),
+		[]byte("import (\n\t\"strings\"\n\n\t\"fmt\"\n)\n\nvar _ = strings.ToUpper"),
+		1,
+	)
+	require.NotEqual(t, generated, scrambled, "test setup must actually scramble imports")
+	require.NoError(t, os.WriteFile(testFile, scrambled, 0644))
+
+	// Run Rewrite again. Methods are already up to date, so the file must
+	// be left byte-identical — no import reordering allowed.
+	require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+	after, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(scrambled), string(after), "no-op Rewrite must not reorder imports")
+
+	// ValidateRewrite must also accept the file (no false positives from
+	// the unsorted imports).
+	require.NoError(t, ValidateRewrite(tmpDir, nil, false))
+}
