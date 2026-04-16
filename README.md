@@ -190,7 +190,12 @@ Options:
 - `-verbose`: Print information about what's happening
 - `-debug`: Insert debug comments in generated code
 - `-print`: Print generated code to stdout instead of writing files
+- `-validate`: Check for missing or outdated enum methods without modifying files. Reports issues to stderr and exits with code 1 if any are found. Intended for CI.
 - `-help`: Show help message
+
+Exit codes:
+- `0` — Success (no issues found in `-validate` mode, or generation completed)
+- `1` — Error occurred (validation failed, file not found, invalid syntax, etc.)
 
 Examples:
 
@@ -203,6 +208,9 @@ go-enum -print
 
 # Generate for specific package
 go-enum ./internal/models
+
+# CI check: fail the build if any enum methods are missing or outdated
+go-enum -validate ./...
 ```
 
 ## Generated Methods Reference
@@ -343,6 +351,7 @@ The tool is smart about updates:
 - If no methods exist, it inserts them after the last enum const
 - If methods already exist, it replaces them in-place
 - Preserves your file structure and other code
+- When generated methods are already up to date, the file is left byte-identical — no import reordering, no whitespace churn. Safe to run in `go generate` on every build.
 
 ## Best Practices
 
