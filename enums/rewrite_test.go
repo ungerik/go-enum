@@ -1095,3 +1095,190 @@ const (
 	// the unsorted imports).
 	require.NoError(t, ValidateRewrite(tmpDir, nil, false))
 }
+
+// TestRewrite_CustomMarkerPreservesMethod verifies that a method tagged with
+// //#custom in its doc comment is neither replaced nor regenerated — it stays
+// verbatim, and no duplicate of it appears in the generated output.
+func TestRewrite_CustomMarkerPreservesMethod(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "status.go")
+
+	// Nullable string enum with a hand-written UnmarshalJSON that would
+	// normally be regenerated, but is tagged //#custom.
+	source := `package example
+
+import (
+	"bytes"
+	"encoding/json"
+)
+
+type Status string //#enum
+
+const (
+	StatusNone     Status = "" //#null
+	StatusActive   Status = "ACTIVE"
+	StatusInactive Status = "INACTIVE"
+)
+
+// UnmarshalJSON accepts legacy bool true/false plus the regular string form.
+//
+//#custom
+func (s *Status) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(data, []byte("true")) {
+		*s = StatusActive
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*s = StatusNone
+		return nil
+	}
+	return json.Unmarshal(data, (*string)(s))
+}
+`
+
+	require.NoError(t, os.WriteFile(testFile, []byte(source), 0644))
+
+	require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+	written, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+	result := string(written)
+
+	// The hand-written method body must survive untouched.
+	assert.Contains(t, result, `if bytes.Equal(data, []byte("true")) {`,
+		"custom UnmarshalJSON body must be preserved")
+	assert.Contains(t, result, `*s = StatusActive`,
+		"custom branch must be preserved")
+
+	// The //#custom marker must remain in the doc comment so re-generation
+	// continues to recognize it. gofmt may normalize "//#custom" to
+	// "// #custom" (with a space); both are accepted by isCustom.
+	assert.True(t,
+		strings.Contains(result, "//#custom") || strings.Contains(result, "// #custom"),
+		"//#custom marker must remain in doc comment (possibly gofmt-normalised)")
+
+	// Exactly one UnmarshalJSON must exist — no duplicate from template.
+	assert.Equal(t, 1, strings.Count(result, ") UnmarshalJSON("),
+		"must not generate a second UnmarshalJSON")
+
+	// Generated companions (non-custom) must still appear.
+	assert.Contains(t, result, "func (s Status) IsNull() bool")
+	assert.Contains(t, result, "func (s Status) IsNotNull() bool")
+	assert.Contains(t, result, "func (s *Status) SetNull()")
+	assert.Contains(t, result, "func (s Status) MarshalJSON() ([]byte, error)")
+	assert.Contains(t, result, "func (s *Status) Scan(value any) error")
+	assert.Contains(t, result, "func (s Status) Value() (driver.Value, error)")
+	assert.Contains(t, result, "func (s Status) Valid() bool")
+
+	// Running again must be a no-op (idempotent).
+	require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+	secondPass, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(written), string(secondPass),
+		"second Rewrite must be byte-identical (idempotent)")
+
+	// ValidateRewrite must also accept the file — no false "outdated" error.
+	require.NoError(t, ValidateRewrite(tmpDir, nil, false))
+}
+
+// TestRewrite_CustomMarkerOnAlwaysGeneratedMethods verifies that `//#custom`
+// on any of the always-generated methods (Valid, Validate, Enums, EnumStrings)
+// preserves the hand-written body and does not produce a duplicate. These
+// methods live in their own templates and must each be individually skippable.
+func TestRewrite_CustomMarkerOnAlwaysGeneratedMethods(t *testing.T) {
+	cases := []struct {
+		name       string
+		methodDecl string
+		signature  string
+	}{
+		{
+			name: "Valid",
+			methodDecl: `//#custom
+func (s Status) Valid() bool {
+	// hand-written liberal check: any non-empty value is valid
+	return s != ""
+}`,
+			signature: ") Valid() bool",
+		},
+		{
+			name: "Validate",
+			methodDecl: `//#custom
+func (s Status) Validate() error {
+	// hand-written: never errors
+	return nil
+}`,
+			signature: ") Validate() error",
+		},
+		{
+			name: "Enums",
+			methodDecl: `//#custom
+func (Status) Enums() []Status {
+	// hand-written: returns only the first value
+	return []Status{StatusActive}
+}`,
+			signature: ") Enums() []Status",
+		},
+		{
+			name: "EnumStrings",
+			methodDecl: `//#custom
+func (Status) EnumStrings() []string {
+	// hand-written: lowercases every value
+	return []string{"active", "inactive"}
+}`,
+			signature: ") EnumStrings() []string",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, "status.go")
+
+			source := `package example
+
+type Status string //#enum
+
+const (
+	StatusActive   Status = "ACTIVE"
+	StatusInactive Status = "INACTIVE"
+)
+
+` + tc.methodDecl + `
+`
+			require.NoError(t, os.WriteFile(testFile, []byte(source), 0644))
+
+			require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+			written, err := os.ReadFile(testFile)
+			require.NoError(t, err)
+			result := string(written)
+
+			// Exactly one declaration of the custom method — no duplicate.
+			assert.Equal(t, 1, strings.Count(result, tc.signature),
+				"must not generate a second %s", tc.name)
+
+			// Marker must survive (gofmt may normalise it).
+			assert.True(t,
+				strings.Contains(result, "//#custom") || strings.Contains(result, "// #custom"),
+				"//#custom marker must remain in doc comment")
+
+			// The other three always-generated methods must still be emitted.
+			allSigs := []string{") Valid() bool", ") Validate() error", ") Enums() []Status", ") EnumStrings() []string"}
+			for _, other := range allSigs {
+				if other == tc.signature {
+					continue
+				}
+				assert.Equal(t, 1, strings.Count(result, other),
+					"non-custom %s must be generated exactly once", other)
+			}
+
+			// Second Rewrite must be idempotent.
+			require.NoError(t, Rewrite(tmpDir, nil, nil, false))
+			secondPass, err := os.ReadFile(testFile)
+			require.NoError(t, err)
+			assert.Equal(t, string(written), string(secondPass),
+				"second Rewrite must be byte-identical (idempotent)")
+
+			// ValidateRewrite must accept the file.
+			require.NoError(t, ValidateRewrite(tmpDir, nil, false))
+		})
+	}
+}

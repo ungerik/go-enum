@@ -46,6 +46,10 @@ type Enum struct {
 	LastEnumDecl ast.Decl
 	// KnownMethods are existing enum methods that will be replaced
 	KnownMethods []*ast.FuncDecl
+	// CustomMethods names methods marked `//#custom` in their doc comment.
+	// These are hand-written and must not be regenerated or replaced.
+	// Keyed by the generator's method name (e.g. "UnmarshalJSON").
+	CustomMethods map[string]bool
 }
 
 // IsStringType returns true if the underlying type is string.

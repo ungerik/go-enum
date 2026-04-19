@@ -47,12 +47,13 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 						return nil, fmt.Errorf("enum type has empty name in %s:%d", astFile.Name.Name, fset.Position(typeSpec.Pos()).Line)
 					}
 					enums[typeName] = &Enum{
-						File:       astFile.Name.Name,
-						Line:       fset.Position(typeSpec.Pos()).Line,
-						Package:    pkg.Name,
-						Type:       typeName,
-						Underlying: astvisit.ExprString(typeSpec.Type),
-						JSONSchema: slices.Contains(parts, "jsonschema"),
+						File:          astFile.Name.Name,
+						Line:          fset.Position(typeSpec.Pos()).Line,
+						Package:       pkg.Name,
+						Type:          typeName,
+						Underlying:    astvisit.ExprString(typeSpec.Type),
+						JSONSchema:    slices.Contains(parts, "jsonschema"),
+						CustomMethods: make(map[string]bool),
 					}
 					break
 				}
@@ -155,25 +156,27 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 		if len(recv.Names) > 0 {
 			enum.Recv = recv.Names[0].Name
 		}
+		// The generator produces these methods. When one already exists,
+		// route it to either CustomMethods (hand-written, must be preserved)
+		// or KnownMethods (will be replaced by the generated version).
+		generated := false
 		switch funcDecl.Name.Name {
 		case "Valid", "Validate", "Enums", "EnumStrings":
-			enum.KnownMethods = append(enum.KnownMethods, funcDecl)
+			generated = true
 		case "String":
-			if enum.IsStringType() {
-				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-			}
-		case "IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON":
-			if enum.IsNullable() {
-				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-			}
-		case "Scan", "Value":
-			if enum.IsNullable() {
-				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-			}
+			generated = enum.IsStringType()
+		case "IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON", "Scan", "Value":
+			generated = enum.IsNullable()
 		case "JSONSchema":
-			if enum.JSONSchema {
-				enum.KnownMethods = append(enum.KnownMethods, funcDecl)
-			}
+			generated = enum.JSONSchema
+		}
+		if !generated {
+			continue
+		}
+		if isCustom(funcDecl) {
+			enum.CustomMethods[funcDecl.Name.Name] = true
+		} else {
+			enum.KnownMethods = append(enum.KnownMethods, funcDecl)
 		}
 	}
 
@@ -190,4 +193,23 @@ func Find(fset *token.FileSet, pkg *ast.Package, astFile *ast.File) (map[string]
 	}
 
 	return enums, nil
+}
+
+// isCustom reports whether the method's doc comment contains a `//#custom`
+// marker line. Such methods are treated as hand-written overrides and are
+// neither replaced nor regenerated.
+//
+// The match tolerates gofmt-normalised forms ("// #custom" with a space
+// after the slashes) so that comments survive AST round-tripping.
+func isCustom(fn *ast.FuncDecl) bool {
+	if fn.Doc == nil {
+		return false
+	}
+	for _, c := range fn.Doc.List {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
+		if trimmed == "#custom" {
+			return true
+		}
+	}
+	return false
 }

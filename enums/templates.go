@@ -2,9 +2,10 @@ package enums
 
 import "text/template"
 
-// validateMethodsTemplate provides the methods: Valid, Validate
-// These methods are generated for all enum types.
-var validateMethodsTemplate = template.Must(template.New("").Parse(`
+// Valid + Validate templates, split per method so `//#custom` can target
+// each individually. Generated for all enum types.
+
+var validTemplate = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Valid() bool {
 	switch {{.Recv}} {
@@ -15,7 +16,9 @@ func ({{.Recv}} {{.Type}}) Valid() bool {
 	}
 	return false
 }
+`))
 
+var validateTemplate = template.Must(template.New("").Parse(`
 // Validate returns an error if {{.Recv}} is none of the valid values for {{.Type}}
 func ({{.Recv}} {{.Type}}) Validate() error {
 	if !{{.Recv}}.Valid() {
@@ -25,24 +28,32 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 }
 `))
 
-// nullableMethodsTemplate provides the methods: IsNull, IsNotNull, SetNull, MarshalJSON, UnmarshalJSON
-// These methods are generated for enum types with a null value (marked with //#null).
-var nullableMethodsTemplate = template.Must(template.New("").Parse(`
+// Nullable methods — one template per method so callers can skip
+// individual methods that are marked `//#custom` on the enum.
+// Generated for enum types with a null value (marked with //#null).
+
+var isNullTemplate = template.Must(template.New("").Parse(`
 // IsNull returns true if {{.Recv}} is the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNull() bool {
 	return {{.Recv}} == {{.Null}}
 }
+`))
 
+var isNotNullTemplate = template.Must(template.New("").Parse(`
 // IsNotNull returns true if {{.Recv}} is not the null value {{.Null}}
 func ({{.Recv}} {{.Type}}) IsNotNull() bool {
 	return {{.Recv}} != {{.Null}}
 }
+`))
 
+var setNullTemplate = template.Must(template.New("").Parse(`
 // SetNull sets the null value {{.Null}} at {{.Recv}}
 func ({{.Recv}} *{{.Type}}) SetNull() {
 	*{{.Recv}} = {{.Null}}
 }
+`))
 
+var nullableMarshalJSONTemplate = template.Must(template.New("").Parse(`
 // MarshalJSON implements encoding/json.Marshaler for {{.Type}}
 // by returning the JSON null value for {{.Null}}.
 func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
@@ -51,7 +62,9 @@ func ({{.Recv}} {{.Type}}) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal({{.Underlying}}({{.Recv}}))
 }
+`))
 
+var nullableUnmarshalJSONTemplate = template.Must(template.New("").Parse(`
 // UnmarshalJSON implements encoding/json.Unmarshaler
 func ({{.Recv}} *{{.Type}}) UnmarshalJSON(j []byte) error {
 	if bytes.Equal(j, []byte("null")) {
@@ -71,9 +84,11 @@ func ({{.Recv}} {{.Type}}) String() string {
 }
 `))
 
-// enumsMethodsTemplate provides the methods: Enums, EnumStrings
-// These methods return all valid enum values as a slice.
-var enumsMethodsTemplate = template.Must(template.New("").Parse(`
+// Enums + EnumStrings templates, split per method so `//#custom` can
+// target each individually. These methods return all valid enum values
+// as a slice.
+
+var enumsTemplate = template.Must(template.New("").Parse(`
 // Enums returns all valid values for {{.Type}}
 func ({{.Type}}) Enums() []{{.Type}} {
 	return []{{.Type}}{
@@ -81,7 +96,9 @@ func ({{.Type}}) Enums() []{{.Type}} {
 {{end}}
 	}
 }
+`))
 
+var enumStringsTemplate = template.Must(template.New("").Parse(`
 // EnumStrings returns all valid values for {{.Type}} as strings
 func ({{.Type}}) EnumStrings() []string {
 	return []string{
@@ -92,9 +109,10 @@ func ({{.Type}}) EnumStrings() []string {
 }
 `))
 
-// nullableStringMethodsTemplate provides database/sql Scanner and Valuer methods for nullable string enums.
-// Generated for nullable string-based enum types.
-var nullableStringMethodsTemplate = template.Must(template.New("").Parse(`
+// Scan + Value templates per underlying type, split per method so
+// `//#custom` can target Scan or Value individually.
+
+var nullableStringScanTemplate = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch value := value.(type) {
@@ -109,7 +127,9 @@ func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	}
 	return nil
 }
+`))
 
+var nullableStringValueTemplate = template.Must(template.New("").Parse(`
 // Value implements the driver database/sql/driver.Valuer interface for {{.Type}}
 func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 	if {{.Recv}} == {{.Null}} {
@@ -119,9 +139,7 @@ func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 }
 `))
 
-// nullableIntMethodsTemplate provides database/sql Scanner and Valuer methods for nullable integer enums.
-// Generated for nullable integer-based enum types.
-var nullableIntMethodsTemplate = template.Must(template.New("").Parse(`
+var nullableIntScanTemplate = template.Must(template.New("").Parse(`
 // Scan implements the database/sql.Scanner interface for {{.Type}}
 func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	switch value := value.(type) {
@@ -136,7 +154,9 @@ func ({{.Recv}} *{{.Type}}) Scan(value any) error {
 	}
 	return nil
 }
+`))
 
+var nullableIntValueTemplate = template.Must(template.New("").Parse(`
 // Value implements the driver database/sql/driver.Valuer interface for {{.Type}}
 func ({{.Recv}} {{.Type}}) Value() (driver.Value, error) {
 	if {{.Recv}} == {{.Null}} {

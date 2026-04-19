@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"text/template"
 
 	"github.com/ungerik/go-astvisit"
 )
@@ -73,16 +74,25 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 			for _, enum := range enums {
 				var methods bytes.Buffer
 				imports[`"fmt"`] = struct{}{}
-				err := validateMethodsTemplate.Execute(&methods, enum)
-				if err != nil {
-					return nil, nil, err
+				alwaysTmpls := []struct {
+					name string
+					tmpl *template.Template
+				}{
+					{"Valid", validTemplate},
+					{"Validate", validateTemplate},
+					{"Enums", enumsTemplate},
+					{"EnumStrings", enumStringsTemplate},
 				}
-				err = enumsMethodsTemplate.Execute(&methods, enum)
-				if err != nil {
-					return nil, nil, err
+				for _, t := range alwaysTmpls {
+					if enum.CustomMethods[t.name] {
+						continue
+					}
+					if err := t.tmpl.Execute(&methods, enum); err != nil {
+						return nil, nil, err
+					}
 				}
-				if enum.IsStringType() {
-					err = stringMethodsTemplate.Execute(&methods, enum)
+				if enum.IsStringType() && !enum.CustomMethods["String"] {
+					err := stringMethodsTemplate.Execute(&methods, enum)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -90,29 +100,49 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 				if enum.IsNullable() {
 					imports[`"bytes"`] = struct{}{}
 					imports[`"encoding/json"`] = struct{}{}
-					err = nullableMethodsTemplate.Execute(&methods, enum)
-					if err != nil {
-						return nil, nil, err
+					nullableTmpls := []struct {
+						name string
+						tmpl *template.Template
+					}{
+						{"IsNull", isNullTemplate},
+						{"IsNotNull", isNotNullTemplate},
+						{"SetNull", setNullTemplate},
+						{"MarshalJSON", nullableMarshalJSONTemplate},
+						{"UnmarshalJSON", nullableUnmarshalJSONTemplate},
 					}
+					for _, t := range nullableTmpls {
+						if enum.CustomMethods[t.name] {
+							continue
+						}
+						if err := t.tmpl.Execute(&methods, enum); err != nil {
+							return nil, nil, err
+						}
+					}
+					var scanTmpl, valueTmpl *template.Template
 					switch {
 					case enum.IsStringType():
 						imports[`"database/sql/driver"`] = struct{}{}
-						err = nullableStringMethodsTemplate.Execute(&methods, enum)
-						if err != nil {
-							return nil, nil, err
-						}
+						scanTmpl = nullableStringScanTemplate
+						valueTmpl = nullableStringValueTemplate
 					case enum.IsIntType():
 						imports[`"database/sql/driver"`] = struct{}{}
-						err = nullableIntMethodsTemplate.Execute(&methods, enum)
-						if err != nil {
+						scanTmpl = nullableIntScanTemplate
+						valueTmpl = nullableIntValueTemplate
+					}
+					if scanTmpl != nil && !enum.CustomMethods["Scan"] {
+						if err := scanTmpl.Execute(&methods, enum); err != nil {
+							return nil, nil, err
+						}
+					}
+					if valueTmpl != nil && !enum.CustomMethods["Value"] {
+						if err := valueTmpl.Execute(&methods, enum); err != nil {
 							return nil, nil, err
 						}
 					}
 				}
-				if enum.JSONSchema {
+				if enum.JSONSchema && !enum.CustomMethods["JSONSchema"] {
 					imports[`"github.com/invopop/jsonschema"`] = struct{}{}
-					err = jsonSchemaMethodTemplate.Execute(&methods, enum)
-					if err != nil {
+					if err := jsonSchemaMethodTemplate.Execute(&methods, enum); err != nil {
 						return nil, nil, err
 					}
 				}

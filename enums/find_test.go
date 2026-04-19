@@ -487,3 +487,130 @@ const (
 	// For non-default types, should have type cast in JSONSchemaEnum
 	assert.Equal(t, []string{"int32(1)", "int32(2)"}, e.JSONSchemaEnum)
 }
+
+func TestFind_CustomMarker(t *testing.T) {
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusNone   Status = "" //#null
+	StatusActive Status = "ACTIVE"
+)
+
+// UnmarshalJSON parses legacy bool forms.
+//
+//#custom
+func (s *Status) UnmarshalJSON(data []byte) error {
+	return nil
+}
+
+// MarshalJSON is the regular regeneration-target variant (no //#custom).
+func (s Status) MarshalJSON() ([]byte, error) {
+	return nil, nil
+}`
+
+	fset, pkg, astFile := parseSource(t, source)
+	enums, err := Find(fset, pkg, astFile)
+	require.NoError(t, err)
+	require.Contains(t, enums, "Status")
+
+	e := enums["Status"]
+
+	// UnmarshalJSON is custom-marked: present in CustomMethods, absent from KnownMethods.
+	assert.True(t, e.CustomMethods["UnmarshalJSON"], "UnmarshalJSON must be recognized as custom")
+
+	for _, km := range e.KnownMethods {
+		assert.NotEqual(t, "UnmarshalJSON", km.Name.Name,
+			"custom-marked UnmarshalJSON must not be in KnownMethods")
+	}
+
+	// MarshalJSON has no //#custom: it's a KnownMethod (replaceable) and
+	// does NOT appear in CustomMethods.
+	assert.False(t, e.CustomMethods["MarshalJSON"], "MarshalJSON has no //#custom, so it must not be custom")
+	hasMarshalKnown := false
+	for _, km := range e.KnownMethods {
+		if km.Name.Name == "MarshalJSON" {
+			hasMarshalKnown = true
+			break
+		}
+	}
+	assert.True(t, hasMarshalKnown, "non-custom MarshalJSON must be in KnownMethods")
+}
+
+func TestFind_CustomMarkerOnAlwaysGeneratedMethods(t *testing.T) {
+	// Valid, Validate, Enums, EnumStrings are generated for every enum,
+	// regardless of string/nullable/jsonschema flags. When marked //#custom
+	// they must be tracked in CustomMethods and kept out of KnownMethods,
+	// so the rewriter can skip the matching template and avoid duplicates.
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusActive Status = "ACTIVE"
+)
+
+//#custom
+func (s Status) Valid() bool {
+	return s != ""
+}
+
+//#custom
+func (s Status) Validate() error {
+	return nil
+}
+
+//#custom
+func (Status) Enums() []Status {
+	return []Status{StatusActive}
+}
+
+//#custom
+func (Status) EnumStrings() []string {
+	return []string{"active"}
+}`
+
+	fset, pkg, astFile := parseSource(t, source)
+	enums, err := Find(fset, pkg, astFile)
+	require.NoError(t, err)
+	require.Contains(t, enums, "Status")
+
+	e := enums["Status"]
+
+	for _, name := range []string{"Valid", "Validate", "Enums", "EnumStrings"} {
+		assert.True(t, e.CustomMethods[name], "%s must be recognized as custom", name)
+		for _, km := range e.KnownMethods {
+			assert.NotEqual(t, name, km.Name.Name,
+				"custom-marked %s must not be in KnownMethods", name)
+		}
+	}
+}
+
+func TestFind_CustomMarkerIgnoredOnNonGeneratedMethod(t *testing.T) {
+	// A //#custom marker on a method that the generator would never produce
+	// (e.g. a user helper "Foo") must be a no-op: not tracked as custom,
+	// not a known method, no side effects.
+	source := `package example
+
+type Status string //#enum
+
+const (
+	StatusA Status = "A"
+)
+
+//#custom
+func (s Status) Foo() string {
+	return string(s)
+}`
+
+	fset, pkg, astFile := parseSource(t, source)
+	enums, err := Find(fset, pkg, astFile)
+	require.NoError(t, err)
+
+	e := enums["Status"]
+	assert.False(t, e.CustomMethods["Foo"], "//#custom on non-generated method must be ignored")
+	for _, km := range e.KnownMethods {
+		assert.NotEqual(t, "Foo", km.Name.Name)
+	}
+}

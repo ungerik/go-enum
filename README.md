@@ -12,6 +12,7 @@ Go code generator for type-safe enums with validation, JSON marshaling, and data
 - **Database Integration**: `database/sql.Scanner` and `driver.Valuer` implementations for nullable enums
 - **AST-Based**: Uses Go's AST for safe, precise code generation
 - **In-Place Updates**: Intelligently updates existing methods without breaking your code
+- **Customizable**: Preserve hand-written methods with `//#custom` when the generated version doesn't fit
 
 ## Installation
 
@@ -179,6 +180,53 @@ The generated schema uses `oneOf` to allow either the enum values or null:
   "default": 0
 }
 ```
+
+### Hand-written Methods (`//#custom`)
+
+Sometimes you need a hand-written version of a method that the generator
+would normally produce — for example, an `UnmarshalJSON` that accepts a
+legacy JSON shape in addition to the current one. Mark the method's doc
+comment with `//#custom` and the generator will preserve it verbatim:
+
+```go
+type Status string //#enum
+
+const (
+	StatusNone   Status = "" //#null
+	StatusActive Status = "ACTIVE"
+)
+
+// UnmarshalJSON accepts legacy bool `true`/`false` in addition to the
+// string enum form, so old JSON fixtures keep parsing.
+//
+//#custom
+func (s *Status) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(data, []byte("true")) {
+		*s = StatusActive
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*s = StatusNone
+		return nil
+	}
+	return json.Unmarshal(data, (*string)(s))
+}
+```
+
+Rules:
+
+- The marker applies only to the immediately-following method declaration.
+- It is meaningful only for methods the generator would otherwise produce
+  (`Valid`, `Validate`, `Enums`, `EnumStrings`, `String`, `IsNull`,
+  `IsNotNull`, `SetNull`, `MarshalJSON`, `UnmarshalJSON`, `Scan`, `Value`,
+  `JSONSchema`). On other methods it is a no-op.
+- A custom-marked method is not added to the generated block, so no
+  duplicate is produced. Other methods on the same type continue to be
+  regenerated normally.
+- `-validate` mode treats custom-marked methods as up-to-date, so they do
+  not cause CI failures.
+- `gofmt` may normalize `//#custom` to `// #custom` (with a space after
+  the slashes) on re-save; both forms are recognized.
 
 ## Command-Line Options
 
