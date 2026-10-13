@@ -2,8 +2,8 @@
 go-enum is a code generator for type-safe enums in Go.
 
 It scans Go source files for enum type definitions marked with the //#enum comment
-and automatically generates validation, conversion, and utility methods using AST
-manipulation provided by github.com/ungerik/go-astvisit.
+and automatically generates validation, conversion, and utility methods
+using the Go AST and go/types.
 
 # Usage
 

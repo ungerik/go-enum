@@ -1,5 +1,7 @@
 # go-enum
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/ungerik/go-enum.svg)](https://pkg.go.dev/github.com/ungerik/go-enum) [![Go Report Card](https://goreportcard.com/badge/github.com/ungerik/go-enum)](https://goreportcard.com/report/github.com/ungerik/go-enum) [![Go](https://github.com/ungerik/go-enum/actions/workflows/go.yml/badge.svg)](https://github.com/ungerik/go-enum/actions/workflows/go.yml) [![Go version](https://img.shields.io/github/go-mod/go-version/ungerik/go-enum)](https://github.com/ungerik/go-enum) [![license](https://img.shields.io/badge/license-MIT-red.svg?style=flat)](https://github.com/ungerik/go-enum/blob/main/LICENSE)
+
 Go code generator for type-safe enums with validation, JSON marshaling, and database support.
 
 ## Features
@@ -24,7 +26,9 @@ go install github.com/ungerik/go-enum@latest
 
 ### 1. Define Your Enum
 
-Add a type with the `//#enum` comment and const values:
+Add a type with the `//#enum` comment and const values.
+The values are all consts of exactly that type, also with `iota`
+or conversions like `Status("pending")`:
 
 ```go
 package example
@@ -129,9 +133,108 @@ _, err = db.Exec("INSERT INTO tasks (priority) VALUES (?)", priority)
 // PriorityNull values become NULL in database
 ```
 
+### Excluding Values (`//#exclude`)
+
+A const of the enum type with a `//#exclude` line comment is not an enum
+value: it is not listed by `Enums()`, `EnumStrings()` and `JSONSchema()`
+and not used in `Valid()`. Use it for sentinels and aliases:
+
+```go
+type Code string //#enum
+
+const (
+	CodeA Code = "A"
+	CodeB Code = "B"
+
+	CodeDefault Code = "A" //#exclude
+)
+
+const CodeInvalid Code = "" //#exclude
+```
+
+Excluded consts are also skipped by the duplicate value check,
+so an alias like `CodeDefault` is not an error.
+An alias initialized with another enum const, like `CodeFallback Code = CodeA`,
+is skipped without a marker. Other values that use an enum const,
+like `CodeAB Code = CodeA + "B"`, are evaluated and are enum values
+with their own value.
+`Valid()` compares values, so it still accepts an alias like `CodeDefault`
+because its value equals `CodeA`. Only a sentinel with a value that
+no other enum value has, like `CodeInvalid`, is rejected by `Valid()`.
+
+The markers `//#null` and `//#exclude` must be written exactly like this
+as comment at the end of the const line. Any other comment of an enum const
+that starts with `#` followed by one of the reserved marker words `enum`,
+`null`, `exclude` or `custom`, like `// #exclude`, `//#exclude legacy` or
+`//#exclude` on the line above the const, is an error, so that a misused
+marker can't silently make a sentinel valid. Other words are ignored,
+including comments of other tools like `//#nosec G101` or `//#region`
+and misspellings like `//#exlude`. A marker comment that is not at the end
+of a type or const line or in the doc comment of a method, like
+`//#exclude` separated from its const by an empty line or `) //#null`,
+is also an error, and so is a marker at a var or at a const that is not of
+an enum type, like `StatusNone = "" //#null` without type.
+
+The generated methods use the packages `fmt`, `bytes`, `encoding/json`,
+`database/sql/driver` and `github.com/invopop/jsonschema` by their package
+names, so a declaration of the package or an import of the file of the enum
+type with the name of a package used by the methods that are not marked with
+`//#custom`, like an enum value named `fmt` or an import of
+`github.com/goccy/go-json` without import name that is used as `json`,
+is an error.
+
+The `//#null` const must be declared in the file of the enum type,
+because it changes which methods are generated in that file.
+
+### Values in Other Files
+
+Enum values are collected from the file declaring the enum type and from
+the other files of the package that are compiled in every build of it,
+ordered by file name and then by their position within the file.
+The generated methods are always written to the file declaring the enum type.
+
+Like with the go tool, files ending in `_test.go` or starting with `_` or `.`
+are ignored. Files with build constraints, a `//go:build` line, a file name
+suffix like `_linux.go` or `_arm64.go` or an `import "C"` for cgo, are also
+ignored if the go tool does not compile them in every build of the file of
+the enum type, because the generated methods would reference values that
+don't exist in some builds. So for an enum type in `status_linux.go`, the
+values in a file with `//go:build linux` or `//go:build unix` are used,
+but not the values in `status_linux_arm64.go`. Build constraints are
+compared like the go tool sets build tags: one GOOS, which can set more
+tags like `android` sets `linux` and `unix`, one GOARCH, the `go1.N` tags up
+to one Go version of at least 1.18, because the generated methods use `any`,
+one of `gc` and `gccgo`, and never `ignore`, so files with
+`//go:build ignore`, like a script for `go run`, are not part of the package,
+and an enum type in such a file only has the values of that file.
+Other GOOS values than the ones in the build constraints are always
+possible, so cover them with a negated build constraint like
+`//go:build !linux`.
+For platform-specific values, declare the enum type with its values in each
+platform-specific file. Each declaration gets its own generated methods,
+which also use the values of the files without build constraints.
+
+An untyped const converted to the enum type, like
+`const MethodGet = Method(http.MethodGet)`, is also an enum value.
+
+The values are evaluated without loading imported packages, so a value
+that uses an import, like `const MethodGet Method = http.MethodGet`,
+is referenced by its name in the generated methods, for example as
+`string(MethodGet)` in `EnumStrings()`.
+
+Only the file declaring the enum type is rewritten, so a method in another
+file, also in a file with build constraints, that the generator would produce,
+like a hand-written `String()` per platform, must be
+marked with [`//#custom`](#hand-written-methods-custom), else it is an error.
+Such a method is then not generated, so it must be declared in every build
+of the file of the enum type, like in `status_linux.go` and in a file with
+`//go:build !linux`, else it is an error.
+
 ### JSON Schema Support
 
-Add `,jsonschema` to the `//#enum` comment:
+Add `,jsonschema` to the `//#enum` comment. The marker must be written
+exactly as `//#enum` at the end of the type line, so `// #enum` is an error.
+Other words like `//#enums` and unknown flags are ignored:
 
 ```go
 type Color string //#enum,jsonschema
@@ -227,6 +330,34 @@ Rules:
   not cause CI failures.
 - `gofmt` may normalize `//#custom` to `// #custom` (with a space after
   the slashes) on re-save; both forms are recognized.
+- Any other doc comment line of these methods that starts with `#`
+  followed by a reserved marker word, like `//#custom legacy JSON`
+  or `//#exclude`, is an error. Other words like a misspelled `// #custum`,
+  doc comment headings like `// # Examples` and comments of other tools
+  like `//#nosec G115` are ignored. A method with a misspelled marker
+  counts as unmarked, see the next rule.
+- A method the generator would produce without `//#custom` is replaced
+  only if it was generated before, recognized by the whole doc comment of
+  the generated method, with or without a period at the end of its lines
+  like added by the godot linter, and also by its code for `UnmarshalJSON`,
+  whose doc comment is a common phrase. Else it is an error, so that a
+  hand-written method without the marker and without exactly that doc
+  comment is not silently replaced. A hand-written method with the doc
+  comment of the generated method is replaced, mark it with `//#custom`
+  to keep it.
+  Comment lines of other tools in the doc comment of a replaced method,
+  like `//nolint:gosec`, are removed with it, mark the method with
+  `//#custom` to keep them.
+- A method that is never generated for the underlying type of the enum,
+  like `String` of an integer enum, is hand-written, also with the doc
+  comment of a generated method. If it also has the code of a generated
+  method, like after changing the underlying type from string to int, it is
+  an error, delete it or mark it with `//#custom` to keep it.
+- A generated method that is no longer generated, for example after removing
+  `//#null`, is removed if it is unchanged. If it was changed since,
+  it is an error, delete it or mark it with `//#custom` to keep it.
+- In other files of the package, where the generator can't replace methods,
+  every method it would produce must be marked with `//#custom`.
 
 ## Command-Line Options
 
@@ -388,17 +519,19 @@ weekdayOptions := Weekday("").EnumStrings()
 
 ## How It Works
 
-1. **AST Parsing**: go-enum parses your Go source files using Go's AST
+1. **AST Parsing**: go-enum parses the Go source files of a package using Go's AST
 2. **Enum Detection**: Finds types marked with `//#enum` comments
-3. **Value Discovery**: Collects all const values of the enum type
+3. **Value Discovery**: Type checks the files of the package that are compiled in every build of the file of the enum type with `go/types` and collects all consts of the enum type with their values
 4. **Template Generation**: Generates methods using Go templates
-5. **Smart Updates**: Either inserts new methods or replaces existing ones
-6. **Import Management**: Automatically adds required imports
+5. **Smart Updates**: Either inserts new methods or replaces the methods it generated before
+6. **Import Management**: Adds the imports the generated methods use and removes the ones they no longer use
 
 The tool is smart about updates:
-- If no methods exist, it inserts them after the last enum const
-- If methods already exist, it replaces them in-place
+- If no methods exist, it inserts them after the last enum const in the file of the enum type, or after the type declaration if that file has no enum consts
+- If methods were generated before, it replaces them in-place
+- Methods that are no longer generated, for example after removing `//#null`, are removed if they are unchanged, else it is an error
 - Preserves your file structure and other code
+- The files of a package are only written after the methods of all its enums were generated without error
 - When generated methods are already up to date, the file is left byte-identical — no import reordering, no whitespace churn. Safe to run in `go generate` on every build.
 
 ## Best Practices
@@ -432,29 +565,34 @@ go generate ./...
 
 String-based enums:
 - `string`
-- Any string-based type alias
+- Any string-based type of the package
 
 Integer-based enums:
 - `int`, `int8`, `int16`, `int32`, `int64`
 - `uint`, `uint8`, `uint16`, `uint32`, `uint64`
 - `byte` (alias for uint8)
+- Any integer-based type of the package
+
+Float and bool-based enums get all methods except `String` and the nullable `Scan` and `Value`.
 
 ## Requirements
 
-- Go 1.23 or later
+- Go 1.26 or later
 - Write access to source files (for code generation)
 
 ## Dependencies
 
-- [github.com/ungerik/go-astvisit](https://github.com/ungerik/go-astvisit) - AST manipulation utilities
+- [golang.org/x/tools](https://pkg.go.dev/golang.org/x/tools) - Import handling of the rewritten files
 - [github.com/invopop/jsonschema](https://github.com/invopop/jsonschema) - JSON Schema generation (optional, only if using `,jsonschema`)
 
 ## Limitations
 
 - Enum values must be const declarations of the enum type
+- The underlying type must be a basic type or a type of the package, not an imported type like `time.Duration`
 - Enum type must have at least one value
 - Only one null value per enum type
-- Receiver name is auto-generated from type name (first letter, lowercase)
+- Enum values in other files that are not compiled in every build of the file of the enum type are not used, and methods the generator would produce in other files must be marked `//#custom` (see [Values in Other Files](#values-in-other-files)). Every combination of build tags other than GOOS, GOARCH, `go1.N`, `gc` and `gccgo`, like `cgo` or custom tags, is evaluated, so with more than 12 of them in the build constraints of two files, the values of the other file are not used, its methods are compared like the methods of files compiled together with the enum type, and its `//#custom` methods are reported as missing in some builds
+- The receiver name is taken from existing methods, else it is the first letter of the type name in lowercase, or `e`, `recv`, `e1`, `e2` and so on if that collides with an identifier used by the generated methods
 
 ## License
 
