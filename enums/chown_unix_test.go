@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -73,8 +74,28 @@ func TestChownLike_KeepsGroupOfOtherUsersFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "status")
 	require.NoError(t, err)
 	defer f.Close()
-	chownLike(f, statInfo{stat: &syscall.Stat_t{Uid: uint32(os.Geteuid() + 1), Gid: uint32(group)}})
+	assert.True(t, chownLike(f, statInfo{stat: &syscall.Stat_t{Uid: uint32(os.Geteuid() + 1), Gid: uint32(group)}}))
 	info, err := f.Stat()
 	require.NoError(t, err)
 	assert.Equal(t, uint32(group), info.Sys().(*syscall.Stat_t).Gid)
+}
+
+// TestChownLike_ReportsGroupNotKept verifies that chownLike reports a group
+// it can't give to the new file, so that writeFile writes the file in place
+// instead of applying its group permissions to the group of the process.
+func TestChownLike_ReportsGroupNotKept(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may set every group")
+	}
+	groups, err := os.Getgroups()
+	require.NoError(t, err)
+	// A group the user is no member of
+	group := 1
+	for slices.Contains(groups, group) || group == os.Getegid() {
+		group++
+	}
+	f, err := os.CreateTemp(t.TempDir(), "status")
+	require.NoError(t, err)
+	defer f.Close()
+	assert.False(t, chownLike(f, statInfo{stat: &syscall.Stat_t{Uid: uint32(os.Geteuid()), Gid: uint32(group)}}))
 }

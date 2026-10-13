@@ -2983,6 +2983,27 @@ func TestRewrite_InternalTestFileMethod(t *testing.T) {
 	})
 	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "status_test.go:3 of a test file would be declared twice in test builds")
 	assert.NotContains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+
+	// The go tool ignores files starting with _ or . also as test files
+	dir = writeFiles(t, map[string]string{
+		"status.go":       "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"_status_test.go": "package example\n\nfunc (s Status) String() string { return \"test\" }\n",
+		".status_test.go": "package example\n\nfunc (s Status) String() string { return \"test\" }\n",
+	})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+}
+
+// TestRewrite_InternalTestFileWithSyntaxError verifies that an internal test
+// file that doesn't parse, like one being edited, doesn't stop generating the
+// methods, because test files are only read to check for collisions.
+func TestRewrite_InternalTestFileWithSyntaxError(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"status.go":      "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"status_test.go": "package example\n\nfunc TestX(t *testing.T) {\n",
+	})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
 }
 
 // TestRewrite_RecursiveReportsAllPackages verifies that an error in one
@@ -3007,6 +3028,42 @@ func TestRewrite_RecursiveReportsAllPackages(t *testing.T) {
 	assert.Contains(t, readFile(t, dir, "p1/status.go"), "func (s Status) Valid() bool")
 	assert.NotContains(t, readFile(t, dir, "p2/status.go"), "func (s Status) Valid() bool")
 	assert.Contains(t, readFile(t, dir, "p3/status.go"), "func (s Status) Valid() bool")
+
+	// Value: protects=a file of one package of ./... that can't be written fails the run naming it, and the other packages are still rewritten;
+	// fails_when=rewrite returns the write error of a package at once, so the packages after it are left without methods;
+	// why_new=the fixture above only fails before writing; coverage shows the write error of rewrite never runs;
+	// seam=none;
+	// no_claim=skipped as root, which can write read-only files; does not check other write errors than permission
+	t.Run("read-only file", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write read-only files")
+		}
+		dir := t.TempDir()
+		for _, name := range []string{"p0", "p1"} {
+			require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name, "status.go"), fmt.Appendf(nil, enum, name), 0644))
+		}
+		// p0 is rewritten before p1
+		require.NoError(t, os.Chmod(filepath.Join(dir, "p0", "status.go"), 0444))
+		require.ErrorContains(t, Rewrite(dir+"/...", nil, nil, false), filepath.Join("p0", "status.go"))
+		assert.NotContains(t, readFile(t, dir, "p0/status.go"), "func (s Status) Valid() bool")
+		assert.Contains(t, readFile(t, dir, "p1/status.go"), "func (s Status) Valid() bool")
+	})
+
+	// A package that doesn't parse, like one being edited, also fails
+	// the run without leaving the other packages without methods
+	t.Run("syntax error", func(t *testing.T) {
+		dir := t.TempDir()
+		for name, source := range map[string]string{
+			"p0": "package p0\n\nfunc broken(\n",
+			"p1": fmt.Sprintf(enum, "p1"),
+		} {
+			require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name, "status.go"), []byte(source), 0644))
+		}
+		require.ErrorContains(t, Rewrite(dir+"/...", nil, nil, false), filepath.Join("p0", "status.go"))
+		assert.Contains(t, readFile(t, dir, "p1/status.go"), "func (s Status) Valid() bool")
+	})
 }
 
 // TestValidateRewrite_RecursivePathWithoutPackages verifies that ./... over
@@ -3017,6 +3074,21 @@ func TestValidateRewrite_RecursivePathWithoutPackages(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "docs"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "README.md"), []byte("# docs\n"), 0644))
 	require.ErrorContains(t, ValidateRewrite(dir+"/...", nil, false), "no Go files in")
+
+	// Value: protects=a directory with only _test.go files has no package files to generate into, so -validate of it fails instead of passing, while ./... of a test-only module passes like go vet;
+	// fails_when=rewrite counts any parsed file as a package file, so a dir of test files passes -validate with nothing checked, or ./... fails for a test-only module;
+	// why_new=the "no Go files" checks above and in TestRewrite_RecursivePathSkipsDirsLikeGoTool use dirs without any .go file;
+	// seam=none;
+	// no_claim=does not check the exit code of the command, only the returned error
+	dir = writeFiles(t, map[string]string{"status_test.go": "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"})
+	require.ErrorContains(t, ValidateRewrite(dir, nil, false), "no non-test Go files in")
+	require.NoError(t, ValidateRewrite(dir+"/...", nil, false))
+
+	// A package that doesn't parse has Go files, so only its error is reported
+	dir = writeFiles(t, map[string]string{"broken.go": "package example\n\nfunc {\n"})
+	err := ValidateRewrite(dir+"/...", nil, false)
+	require.ErrorContains(t, err, "broken.go")
+	assert.NotContains(t, err.Error(), "or below")
 }
 
 // TestRewrite_TypeExpressionAsUnderlyingType verifies that methods generated
@@ -3025,8 +3097,10 @@ func TestValidateRewrite_RecursivePathWithoutPackages(t *testing.T) {
 // else go-enum would reject its own output.
 func TestRewrite_TypeExpressionAsUnderlyingType(t *testing.T) {
 	for name, underlying := range map[string]string{
-		"type arguments": "type str[T any] string\n\ntype Status str[int] //#enum\n",
-		"parentheses":    "type Status (string) //#enum\n",
+		"type arguments":        "type str[T any] string\n\ntype Status str[int] //#enum\n",
+		"nested type arguments": "type str[T any] string\n\ntype Status str[map[string][]byte] //#enum\n",
+		"slice type argument":   "type str[T any] string\n\ntype Status str[[]byte] //#enum\n",
+		"parentheses":           "type Status (string) //#enum\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeFiles(t, map[string]string{"status.go": "package example\n\n" + underlying + "\nconst (\n\tStatusNone   Status = \"\" //#null\n\tStatusActive Status = \"active\"\n)\n"})

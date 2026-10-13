@@ -7,5 +7,6 @@ import (
 	"os"
 )
 
-// chownLike does nothing on systems without unix file owners.
-func chownLike(*os.File, fs.FileInfo) {}
+// chownLike does nothing on systems without unix file owners
+// and reports true.
+func chownLike(*os.File, fs.FileInfo) bool { return true }

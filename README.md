@@ -249,6 +249,10 @@ On Linux `Signal(0).Enums()` returns `SignalInterrupt`, `SignalHangup` and
 
 An untyped const converted to the enum type, like
 `const MethodGet = Method(http.MethodGet)`, is also an enum value.
+An untyped const computed from such a value with an operator or with `min`
+or `max`, like `const MethodGetX = MethodGet + "X"`, can't be evaluated and
+is an error: declare it with the enum type, like
+`const MethodGetX Method = MethodGet + "X"`.
 
 The values are evaluated without loading imported packages, so a value
 that uses an import, like `const MethodGet Method = http.MethodGet`,
@@ -303,7 +307,8 @@ go-enum generates all other methods of `Status` in `status.go`, but no `String()
 the generated methods, so a method there that would be generated, or a
 package-level name like `driver` of a package used by the generated methods,
 is an error. Their values are not used, because they are not compiled in
-regular builds.
+regular builds, and a test file that doesn't parse, like one being edited,
+is skipped.
 
 ### JSON Schema Support
 
@@ -652,7 +657,7 @@ The tool is smart about updates:
 - Preserves your file structure and other code
 - The files of a package are only written after the methods of all its enums were generated without error
 - When generated methods are already up to date, the file is left byte-identical — no import reordering, no whitespace churn. Safe to run in `go generate` on every build.
-- A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error. In a directory without write permission, a writable file is written in place like with `os.WriteFile`.
+- A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A file whose group can't be given to the new file is written in place, so that its group permissions don't apply to another group. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error. In a directory without write permission, a writable file is written in place like with `os.WriteFile`, and so is a writable file of another user in a directory with the sticky bit, like `/tmp`, where it can't be replaced.
 - A file with CRLF line endings, like in a Windows checkout, keeps them. A file with only some CRLF line endings gets LF line endings, like with gofmt.
 
 The [Design](#design) section explains why it works this way.
@@ -793,7 +798,8 @@ consts that are not of an enum type, and declarations or imports named like
 a package used by the generated methods. All errors of a package are
 reported at once, and its files are only written after the methods of all
 its enums were generated, each through a temporary file that is synced to
-disk and replaces it. Files with up-to-date methods are not written at all,
+disk and replaces it, or in place where the directory permits no
+replacement. Files with up-to-date methods are not written at all,
 so their bytes, including the import layout, stay unchanged.
 
 ## Changelog

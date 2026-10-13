@@ -56,12 +56,11 @@ func Find(fset *token.FileSet, files map[string]*ast.File) ([]*Enum, error) {
 		infos       = make(map[string]*types.Info)        // type checked files by their names
 		// Files of packages with enums, checked for marker comments at wrong places
 		markerFiles = make(map[string]bool)
-		enumTypes   = make(map[string]map[string]bool)    // names of enum types by package name
-		enumSpecs   = make(map[*ast.ValueSpec]bool)       // const specs with enum values
-		usedNames   = make(map[*ast.File]map[string]bool) // usedPackageNames by file
+		enumTypes   = make(map[string]map[string]string) // files of enum types by package and type name
+		enumSpecs   = make(map[*ast.ValueSpec]bool)      // const specs with enum values
 	)
 	for _, name := range fileNames {
-		if isIgnoredFile(name) && !isTestFile(name) {
+		if isIgnoredFile(name) {
 			continue
 		}
 		c, err := buildConstraint(fset, name, files[name])
@@ -86,9 +85,9 @@ func Find(fset *token.FileSet, files map[string]*ast.File) ([]*Enum, error) {
 		}
 		for _, typeSpec := range typeSpecs {
 			if enumTypes[file.Name.Name] == nil {
-				enumTypes[file.Name.Name] = make(map[string]bool)
+				enumTypes[file.Name.Name] = make(map[string]string)
 			}
-			enumTypes[file.Name.Name][typeSpec.spec.Name.Name] = true
+			enumTypes[file.Name.Name][typeSpec.spec.Name.Name] = fset.PositionFor(typeSpec.spec.Pos(), false).Filename
 		}
 
 		var (
@@ -125,7 +124,7 @@ func Find(fset *token.FileSet, files map[string]*ast.File) ([]*Enum, error) {
 		}
 
 		for _, typeSpec := range typeSpecs {
-			enum, err := newEnum(fset, info, pkgFiles, methodFiles, constraints, enumSpecs, usedNames, file, typeSpec)
+			enum, err := newEnum(fset, info, pkgFiles, methodFiles, constraints, enumSpecs, file, typeSpec)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -152,7 +151,7 @@ func Find(fset *token.FileSet, files map[string]*ast.File) ([]*Enum, error) {
 // that is not of one of the enumTypes, because it would be ignored silently.
 // Markers of the enumSpecs, the const specs with enum values, are checked
 // where the enums are found.
-func checkStrayMarkers(fset *token.FileSet, file *ast.File, enumTypes map[string]bool, enumSpecs map[*ast.ValueSpec]bool) error {
+func checkStrayMarkers(fset *token.FileSet, file *ast.File, enumTypes map[string]string, enumSpecs map[*ast.ValueSpec]bool) error {
 	allowed := make(map[*ast.CommentGroup]bool)
 	var bodies []ast.Node
 	for _, decl := range file.Decls {
@@ -176,7 +175,8 @@ func checkStrayMarkers(fset *token.FileSet, file *ast.File, enumTypes map[string
 					if spec.Type != nil || len(spec.Values) > 0 {
 						typ, values = spec.Type, spec.Values
 					}
-					if enumSpecs[spec] || decl.Tok == token.CONST && enumTypes[constTypeName(typ, values)] {
+					typeFile := enumTypes[constTypeName(typ, values)]
+					if enumSpecs[spec] || decl.Tok == token.CONST && typeFile != "" {
 						allowed[decl.Doc], allowed[spec.Doc], allowed[spec.Comment] = true, true, true
 						if enumSpecs[spec] {
 							continue
@@ -189,8 +189,8 @@ func checkStrayMarkers(fset *token.FileSet, file *ast.File, enumTypes map[string
 						}
 						if null {
 							pos := fset.Position(spec.Pos())
-							return fmt.Errorf("the //#null enum const %s in %s:%d must be declared in the file of the enum type",
-								spec.Names[0].Name, pos.Filename, pos.Line)
+							return fmt.Errorf("the //#null enum const %s in %s:%d must be declared in %s, the file of the enum type",
+								spec.Names[0].Name, pos.Filename, pos.Line, typeFile)
 						}
 						continue
 					}
@@ -358,7 +358,7 @@ func parseEnumMarker(text string) (jsonSchema, ok bool) {
 
 // newEnum returns the enum declared by typeSpec in file with its values
 // in pkgFiles and its existing methods in methodFiles.
-func newEnum(fset *token.FileSet, info *types.Info, pkgFiles, methodFiles []*ast.File, constraints map[*ast.File]constraint.Expr, enumSpecs map[*ast.ValueSpec]bool, usedNames map[*ast.File]map[string]bool, file *ast.File, typeSpec enumTypeSpec) (*Enum, error) {
+func newEnum(fset *token.FileSet, info *types.Info, pkgFiles, methodFiles []*ast.File, constraints map[*ast.File]constraint.Expr, enumSpecs map[*ast.ValueSpec]bool, file *ast.File, typeSpec enumTypeSpec) (*Enum, error) {
 	// Not adjusted by //line directives because the methods
 	// are written to the file that declares the type
 	typePos := fset.PositionFor(typeSpec.spec.Pos(), false)
@@ -393,10 +393,7 @@ func newEnum(fset *token.FileSet, info *types.Info, pkgFiles, methodFiles []*ast
 	if err := enum.findMethods(fset, methodFiles, constraints, file); err != nil {
 		return nil, err
 	}
-	if usedNames[file] == nil {
-		usedNames[file] = usedPackageNames(file)
-	}
-	if err := enum.checkPackageNames(fset, methodFiles, file, usedNames[file]); err != nil {
+	if err := enum.checkPackageNames(fset, methodFiles, file); err != nil {
 		return nil, err
 	}
 	return enum, nil
@@ -407,7 +404,7 @@ func newEnum(fset *token.FileSet, info *types.Info, pkgFiles, methodFiles []*ast
 // generated methods, because the generated methods would refer to it instead.
 // The declarations of all methodFiles are checked, because the generated
 // methods are compiled together with them in some build.
-func (e *Enum) checkPackageNames(fset *token.FileSet, methodFiles []*ast.File, file *ast.File, usedNames map[string]bool) error {
+func (e *Enum) checkPackageNames(fset *token.FileSet, methodFiles []*ast.File, file *ast.File) error {
 	// The names of the packages used by the methods that are not //#custom
 	_, imports, err := e.generateMethods()
 	if err != nil {
@@ -446,6 +443,7 @@ func (e *Enum) checkPackageNames(fset *token.FileSet, methodFiles []*ast.File, f
 			}
 		}
 	}
+	usedNames := usedPackageNames(file)
 	for _, imp := range file.Imports {
 		importPath, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {
@@ -506,6 +504,8 @@ func (e *Enum) findValues(fset *token.FileSet, info *types.Info, pkgFiles []*ast
 					for j, name := range spec.(*ast.ValueSpec).Names {
 						if isEnumConst(info, name, valueAt(specValues[i], j), enumType) {
 							enumConsts[info.Defs[name]] = true
+							// Before any error, so that its markers are not taken as stray
+							enumSpecs[spec.(*ast.ValueSpec)] = true
 						}
 					}
 				}
@@ -535,7 +535,8 @@ func (e *Enum) findValues(fset *token.FileSet, info *types.Info, pkgFiles []*ast
 					// like Method(http.MethodGet) + "X", has an invalid type
 					for j, name := range valueSpec.Names {
 						c, ok := info.Defs[name].(*types.Const)
-						if ok && c.Type() == types.Typ[types.Invalid] && hasEnumType(info, valueAt(values, j), enumType) {
+						value := valueAt(values, j)
+						if ok && c.Type() == types.Typ[types.Invalid] && hasEnumType(info, value, enumType, enumConsts) && !isAlias(info, value, enumConsts) {
 							pos := fset.Position(name.Pos())
 							return fmt.Errorf("enum const %s in %s:%d can't be evaluated because it uses an import, declare it with the type like %s %s = ...",
 								name.Name, pos.Filename, pos.Line, name.Name, e.Type)
@@ -543,7 +544,6 @@ func (e *Enum) findValues(fset *token.FileSet, info *types.Info, pkgFiles []*ast
 					}
 					continue
 				}
-				enumSpecs[valueSpec] = true
 				// Generated methods are inserted after
 				// the last enum const of the enum type file
 				if f == file {
@@ -656,7 +656,9 @@ func (e *Enum) valueExprs(name string, value constant.Value) (stringExpr, jsonEx
 // including files with build constraints, except files with another declaration
 // of the enum type. Methods in the file of the enum type that were generated
 // by go-enum are replaced, other methods that would be generated must be marked
-// with //#custom to not be generated again.
+// with //#custom to not be generated again. In internal _test.go files they are
+// an error, also with //#custom, because go test compiles them together with
+// the generated methods.
 func (e *Enum) findMethods(fset *token.FileSet, methodFiles []*ast.File, constraints map[*ast.File]constraint.Expr, file *ast.File) error {
 	// Receiver names of generated methods, other methods
 	// in the file of the enum type, and methods in other files
@@ -855,29 +857,41 @@ func isAlias(info *types.Info, value ast.Expr, enumConsts map[types.Object]bool)
 
 // hasEnumType reports whether a const expression has the enum type by its
 // outermost operation, like Method(http.MethodGet) + "X", but not when it
-// only uses the enum type, like string(Method(http.MethodGet)).
-func hasEnumType(info *types.Info, expr ast.Expr, enumType types.Type) bool {
+// only uses the enum type, like string(Method(http.MethodGet)). The
+// enumConsts are the consts of the enum type, also with invalid type.
+func hasEnumType(info *types.Info, expr ast.Expr, enumType types.Type, enumConsts map[types.Object]bool) bool {
 	switch x := ast.Unparen(expr).(type) {
 	case *ast.CallExpr:
 		fun, ok := ast.Unparen(x.Fun).(*ast.Ident)
 		if !ok {
 			return false
 		}
-		typeName, ok := info.Uses[fun].(*types.TypeName)
-		return ok && types.Identical(typeName.Type(), enumType)
+		switch obj := info.Uses[fun].(type) {
+		case *types.TypeName:
+			return types.Identical(obj.Type(), enumType)
+		case *types.Builtin:
+			// min and max have the type of their arguments
+			if obj.Name() == "min" || obj.Name() == "max" {
+				return slices.ContainsFunc(x.Args, func(arg ast.Expr) bool {
+					return hasEnumType(info, arg, enumType, enumConsts)
+				})
+			}
+		}
+		return false
 	case *ast.BinaryExpr:
 		switch x.Op {
-		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ, token.LAND, token.LOR:
+		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
 			return false // untyped bool
 		case token.SHL, token.SHR:
-			return hasEnumType(info, x.X, enumType)
+			return hasEnumType(info, x.X, enumType, enumConsts)
 		}
-		return hasEnumType(info, x.X, enumType) || hasEnumType(info, x.Y, enumType)
+		// Also && and || of a bool enum
+		return hasEnumType(info, x.X, enumType, enumConsts) || hasEnumType(info, x.Y, enumType, enumConsts)
 	case *ast.UnaryExpr:
-		return x.Op != token.NOT && hasEnumType(info, x.X, enumType)
+		return hasEnumType(info, x.X, enumType, enumConsts)
 	case *ast.Ident:
 		c, ok := info.Uses[x].(*types.Const)
-		return ok && types.Identical(c.Type(), enumType)
+		return ok && (types.Identical(c.Type(), enumType) || enumConsts[c])
 	}
 	return false
 }
@@ -898,16 +912,15 @@ func constSpecValues(genDecl *ast.GenDecl) [][]ast.Expr {
 }
 
 // isIgnoredFile reports whether the go tool ignores the file
-// because it is a test file or its name starts with _ or .
+// because its name starts with _ or .
 func isIgnoredFile(fileName string) bool {
 	base := filepath.Base(fileName)
-	return strings.HasSuffix(base, "_test.go") || strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".")
+	return strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".")
 }
 
 // isTestFile reports whether the go tool compiles the file only for tests.
 func isTestFile(fileName string) bool {
-	base := filepath.Base(fileName)
-	return strings.HasSuffix(base, "_test.go") && !strings.HasPrefix(base, "_") && !strings.HasPrefix(base, ".")
+	return strings.HasSuffix(fileName, "_test.go") && !isIgnoredFile(fileName)
 }
 
 // maxBuildTags limits the independent build tags of compared build

@@ -57,8 +57,9 @@ type methodPattern struct {
 var (
 	actionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	identPattern = `[\p{L}_][\p{L}\p{N}_]*`
-	// typePattern matches the underlying type, like string, j[int] or (string)
-	typePattern = `(?:` + identPattern + `(?:\[[^\]\n]*\])?|\([^\n]*?\))`
+	// typePattern matches the underlying type, like string, j[int],
+	// j[[]byte] with nested brackets, or (string)
+	typePattern = `(?:` + identPattern + `(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\])?|\([^\n]*?\))`
 )
 
 // generatedPatterns are the patterns of the generated methods by method name,

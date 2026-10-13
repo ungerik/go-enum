@@ -1738,9 +1738,15 @@ func TestFind_MarkerOnValueWithoutEnumType(t *testing.T) {
 
 	// Markers at consts of an enum type, also implicitly repeated, converted
 	// or in files that are not compiled with the enum type, are valid
+	//
+	// Value: protects=//#exclude at an untyped conversion to the enum type in a file of some builds, like MethodLinuxAny, is valid;
+	// fails_when=constTypeName loses its conversion form, so the const in status_linux.go is taken as no const of an enum type and fails;
+	// why_new=the conversion MethodAny is in the file of the enum type, whose enum consts are allowed without constTypeName;
+	// seam=none;
+	// no_claim=does not check that a //#null there fails, only that //#exclude is accepted
 	fset, files := parseFiles(t, map[string]string{
 		"status.go":       "package example\n\nimport \"net/http\"\n\ntype Method string //#enum\n\nconst (\n\tMethodGet = Method(http.MethodGet)\n\tMethodAny = Method(\"*\") //#exclude\n)\n\ntype Kind int //#enum\n\nconst (\n\tKindA Kind = iota\n\tKindB //#exclude\n\tKindC\n)\n",
-		"status_linux.go": "package example\n\nconst MethodLinux Method = \"LINUX\" //#exclude\n",
+		"status_linux.go": "package example\n\nconst MethodLinux Method = \"LINUX\" //#exclude\n\nconst MethodLinuxAny = Method(\"*\") //#exclude\n",
 	})
 	enums, err := findInFile(fset, files, files["status.go"])
 	require.NoError(t, err)
@@ -2184,7 +2190,7 @@ func TestFind_MarkersOfConstsInFilesOfSomeBuilds(t *testing.T) {
 	// ignored silently
 	status := "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
 	for source, message := range map[string]string{
-		"package example\n\nconst StatusNone Status = \"\" //#null\n":             "the //#null enum const StatusNone in status_linux.go:3 must be declared in the file of the enum type",
+		"package example\n\nconst StatusNone Status = \"\" //#null\n":             "the //#null enum const StatusNone in status_linux.go:3 must be declared in status.go, the file of the enum type",
 		"package example\n\nconst StatusOld Status = \"old\" //#exclude legacy\n": "invalid marker comment \"//#exclude legacy\" for enum const StatusOld in status_linux.go:3",
 	} {
 		fset, files := parseFiles(t, map[string]string{"status.go": status, "status_linux.go": source})
@@ -2250,8 +2256,18 @@ func TestFind_InternalTestFiles(t *testing.T) {
 		require.ErrorContains(t, err, message)
 	}
 
-	// Other methods and the external test package are fine
+	// Markers in test files are not read, like before v1.2.0
 	fset, files := parseFiles(t, map[string]string{
+		"status.go":      status,
+		"status_test.go": "package example\n\ntype testKind int //#enum\n\nconst testKindA testKind = 1\n\nconst StatusTestNull Status = \"\" //#null\n\nvar debugStatus = StatusActive //#exclude\n",
+	})
+	found, err := Find(fset, files)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Equal(t, "Status", found[0].Type)
+
+	// Other methods and the external test package are fine
+	fset, files = parseFiles(t, map[string]string{
 		"status.go":          status,
 		"status_test.go":     "package example\n\nconst StatusTestOnly Status = \"test\"\n\nfunc (s Status) Label() string { return \"label\" }\n",
 		"status_ext_test.go": "package example_test\n\nconst driver = \"sqlite3\"\n",
@@ -2259,6 +2275,42 @@ func TestFind_InternalTestFiles(t *testing.T) {
 	enums, err := findInFile(fset, files, files["status.go"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"StatusNone", "StatusActive"}, valueNames(enums["Status"]))
+}
+
+func TestFind_UnevaluableConstsOfEnumType(t *testing.T) {
+	// Consts of the enum type that use an import can't be evaluated, and
+	// must fail instead of silently not being enum values: also when built
+	// from an untyped conversion of an import, with && and ! of a bool enum,
+	// or with the builtins min and max
+	for name, consts := range map[string]string{
+		"derived from converted import": "type Flag int //#enum\n\nconst (\n\tFlagRead = Flag(os.O_RDONLY)\n\tx        = FlagRead + 1\n)\n",
+		"or of converted imports":       "type Flag int //#enum\n\nconst (\n\tFlagRead = Flag(os.O_RDONLY)\n\tx        = FlagRead | Flag(os.O_WRONLY)\n)\n",
+		"not of bool enum":              "type Flag bool //#enum\n\nconst (\n\tFlagOn = Flag(os.O_RDONLY == 0)\n\tx      = !Flag(os.O_RDONLY == 0)\n)\n",
+		"and of bool enum":              "type Flag bool //#enum\n\nconst (\n\tFlagOn = Flag(os.O_RDONLY == 0)\n\tx      = FlagOn && Flag(os.O_WRONLY == 1)\n)\n",
+		"max":                           "type Flag int //#enum\n\nconst (\n\tFlagB Flag = 2\n\tx          = max(Flag(os.O_RDONLY), FlagB)\n)\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fset, files, astFile := parseSource(t, "package example\n\nimport \"os\"\n\n"+consts)
+			_, err := findInFile(fset, files, astFile)
+			require.ErrorContains(t, err, "enum const x in test.go:")
+			assert.Contains(t, err.Error(), "can't be evaluated because it uses an import")
+		})
+	}
+
+	// An alias of such a const is no enum value, without error
+	fset, files, astFile := parseSource(t, "package example\n\nimport \"os\"\n\ntype Flag int //#enum\n\nconst (\n\tFlagRead    = Flag(os.O_RDONLY)\n\tFlagDefault = FlagRead\n)\n")
+	enums, err := findInFile(fset, files, astFile)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FlagRead"}, valueNames(enums["Flag"]))
+}
+
+func TestFind_NullMarkerAfterFailedEnum(t *testing.T) {
+	// A //#null const in the file of the enum type must not get a second,
+	// misleading error to move it there when the enum fails for another reason
+	fset, files, astFile := parseSource(t, "package example\n\ntype Status string //#enum\n\nconst (\n\tStatusA    Status = \"a\"\n\tStatusB    Status = \"a\"\n\tStatusNone Status = \"\" //#null\n)\n")
+	_, err := findInFile(fset, files, astFile)
+	require.ErrorContains(t, err, "duplicate enum value")
+	assert.NotContains(t, err.Error(), "must be declared in")
 }
 
 func TestFind_AnnotationOfOtherToolAfterGofmt(t *testing.T) {
@@ -2407,6 +2459,18 @@ const (
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "fmt in storage_darwin.go:3 has the name of the package fmt")
 	}
+
+	// Value: protects=the unaliased json import of an enum file is checked by the names used in that file, also after another enum file without json;
+	// fails_when=the names used by the first enum file are cached for the package, so the json use of the second file is missed and its methods use go-json;
+	// why_new=the unaliased import case above has one file, so a cache per package instead of per file gives the same names there;
+	// seam=none;
+	// no_claim=does not build the package, only checks the Find error
+	fset, files = parseFiles(t, map[string]string{
+		"a.go": "package example\n\ntype Kind int //#enum\n\nconst KindA Kind = 1\n",
+		"b.go": "package example\n\nimport \"github.com/goccy/go-json\"\n\nvar _ = json.Marshal\n\ntype Status string //#enum\n\nconst (\n\tStatusNone   Status = \"\" //#null\n\tStatusActive Status = \"active\"\n)\n",
+	})
+	_, err := Find(fset, files)
+	require.ErrorContains(t, err, `import "github.com/goccy/go-json" in b.go:3 has the name of the package encoding/json used by the generated methods`)
 
 	// Only the packages used by the methods that are not //#custom count,
 	// like for custom JSON methods with another JSON package, and an
@@ -2583,4 +2647,32 @@ const methodSize = unsafe.Sizeof(MethodGet)
 	enums, err := findInFile(fset, files, astFile)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"MethodGet"}, valueNames(enums["Method"]))
+
+	// Value: protects=a const of the enum type by its outermost negation, enum operand or shifted operand fails instead of being dropped as a value;
+	// fails_when=hasEnumType loses its unary, ident or shift case, or the bool comparison or shift count case, so it errs on consts of other types;
+	// why_new=only a conversion plus a string is checked above; coverage shows the unary, ident, shift and comparison cases of hasEnumType never run;
+	// seam=none;
+	// no_claim=does not build the package, only checks the Find error and the values
+	for expr, wantErr := range map[string]bool{
+		// A dropped const of the enum type would silently not be a valid value
+		"-Kind(syscall.SIGKILL)":     true,
+		"KindA + syscall.SIGKILL":    true,
+		"Kind(syscall.SIGKILL) << 1": true,
+		// An untyped bool, and a shift with the enum type only as shift
+		// count, are no consts of the enum type, so they must not fail
+		`Method(http.MethodGet) == "GET"`: false,
+		"1 << Kind(syscall.SIGKILL)":      false,
+	} {
+		t.Run(expr, func(t *testing.T) {
+			fset, files, astFile := parseSource(t, "package example\n\nimport (\n\t\"net/http\"\n\t\"syscall\"\n)\n\ntype Kind int //#enum\n\nconst KindA Kind = 1\n\ntype Method string //#enum\n\nconst MethodGet Method = \"GET\"\n\nconst x = "+expr+"\n")
+			enums, err := findInFile(fset, files, astFile)
+			if wantErr {
+				require.ErrorContains(t, err, "x in test.go:16 can't be evaluated because it uses an import")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{"KindA"}, valueNames(enums["Kind"]))
+			assert.Equal(t, []string{"MethodGet"}, valueNames(enums["Method"]))
+		})
+	}
 }

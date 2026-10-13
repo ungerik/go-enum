@@ -71,22 +71,30 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 	var (
 		outdated []string
 		errs     []error // of all packages, so that one run reports all of them
-		packages int     // with Go files
+		packages int     // directories with Go files
 	)
 	for _, dir := range dirs {
 		fset := token.NewFileSet()
 		files, sources, crlfFiles, err := parsePackageDir(fset, dir)
 		if err != nil {
 			errs = append(errs, err)
+			packages++ // with a Go file that doesn't parse
 			continue
 		}
-		if !slices.ContainsFunc(slices.Collect(maps.Keys(files)), func(filePath string) bool { return !isTestFile(filePath) }) {
+		if len(files) == 0 {
 			if !recursive {
 				errs = append(errs, fmt.Errorf("no Go files in %s", dir))
 			}
 			continue
 		}
 		packages++
+		if !slices.ContainsFunc(slices.Collect(maps.Keys(files)), func(filePath string) bool { return !isTestFile(filePath) }) {
+			// Like a test-only module, which has no enums
+			if !recursive {
+				errs = append(errs, fmt.Errorf("no non-test Go files in %s", dir))
+			}
+			continue
+		}
 		if onlyFile != "" {
 			onlyFile, err = packageFile(onlyFile, files)
 			if err != nil {
@@ -211,7 +219,10 @@ func packageDirs(path string) (dirs []string, file string, recursive bool, err e
 
 // writeFile writes data to a temporary file in the directory of filePath
 // and renames it to filePath, so that an interrupted write can't leave
-// a truncated source file. The file mode of filePath is kept.
+// a truncated source file. The file mode of filePath is kept. Without
+// permission to create or rename a file in the directory, or to give the
+// temporary file the group of filePath, the file is written in place
+// like with os.WriteFile, without that guarantee.
 func writeFile(filePath string, data []byte) error {
 	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
 		filePath = resolved
@@ -250,7 +261,12 @@ func writeFile(filePath string, data []byte) error {
 	}
 	// Like writing the file itself, keep its owner and group if possible,
 	// and its mode, set through the open file to not follow a replaced path
-	chownLike(tmp, info)
+	if !chownLike(tmp, info) {
+		// The group permissions of the mode would apply to another group,
+		// so write the file itself like os.WriteFile
+		tmp.Close()
+		return os.WriteFile(filePath, data, info.Mode().Perm())
+	}
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		tmp.Close()
 		return err
@@ -258,7 +274,14 @@ func writeFile(filePath string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), filePath)
+	if err := os.Rename(tmp.Name(), filePath); errors.Is(err, fs.ErrPermission) {
+		// Like the file of another user in a sticky directory,
+		// write the file itself like os.WriteFile
+		return os.WriteFile(filePath, data, info.Mode().Perm())
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 // packageFile returns the path of the parsed file that is the same file
@@ -280,8 +303,11 @@ func packageFile(path string, files map[string]*ast.File) (string, error) {
 	return "", fmt.Errorf("%s is not a Go file of the package in %s", path, filepath.Dir(path))
 }
 
-// parsePackageDir parses the Go files of a directory, also the test files,
-// except the files starting with _ or . that the go tool ignores.
+// parsePackageDir parses the Go files of a directory, except the files
+// starting with _ or . that the go tool ignores. Test files are parsed if
+// another file has an enum marker, or if there are only test files, and
+// skipped if they don't parse, because they are only read to check the
+// enums for collisions in test builds.
 //
 // The sources are parsed with LF line endings, so that they can be compared
 // with generated methods. Files with CRLF line endings, like in a Windows
@@ -294,24 +320,54 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 	files = make(map[string]*ast.File)
 	sources = make(map[string][]byte)
 	crlfFiles = make(map[string]bool)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || isIgnoredFile(entry.Name()) && !isTestFile(entry.Name()) {
-			continue
-		}
-		filePath := filepath.Join(dir, entry.Name())
+	read := func(filePath string) ([]byte, error) {
 		source, err := os.ReadFile(filePath) //#nosec G304 -- file of the package to rewrite
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 		if crlf := bytes.Count(source, []byte("\r\n")); crlf > 0 {
 			// Like gofmt, a file with some CRLF line endings gets LF line endings
 			crlfFiles[filePath] = crlf == bytes.Count(source, []byte("\n"))
 			source = bytes.ReplaceAll(source, []byte("\r\n"), []byte("\n"))
 		}
+		return source, nil
+	}
+	var testFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || isIgnoredFile(entry.Name()) {
+			continue
+		}
+		filePath := filepath.Join(dir, entry.Name())
+		if isTestFile(filePath) {
+			testFiles = append(testFiles, filePath)
+			continue
+		}
+		source, err := read(filePath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		// With object resolution for usedPackageNames
 		file, err := parser.ParseFile(fset, filePath, source, parser.ParseComments)
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		files[filePath] = file
+		sources[filePath] = source
+	}
+	if len(sources) > 0 && !slices.ContainsFunc(slices.Collect(maps.Values(sources)), func(source []byte) bool {
+		return bytes.Contains(source, []byte("#enum"))
+	}) {
+		return files, sources, crlfFiles, nil
+	}
+	for _, filePath := range testFiles {
+		source, err := read(filePath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		file, err := parser.ParseFile(fset, filePath, source, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			// Like a test file being edited, which doesn't stop generating the methods
+			continue
 		}
 		files[filePath] = file
 		sources[filePath] = source

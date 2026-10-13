@@ -68,7 +68,7 @@ are unchanged:
   ```go
   fset := token.NewFileSet()
   files := make(map[string]*ast.File)
-  for _, path := range goFilePaths { // all non-test Go files of the package
+  for _, path := range goFilePaths { // all Go files of the package, its internal _test.go files are optional
   	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
   	if err != nil {
   		return err
@@ -96,9 +96,9 @@ are unchanged:
   generated methods and are skipped by the duplicate checks.
 - Enum values and methods are read from all files of the package that are
   compiled in every build of the file declaring the enum type instead of only
-  from that file. Like with the go tool, files ending in `_test.go` or
-  starting with `_` or `.` are ignored, and so are files with a `//go:build`
-  line, a file name suffix like `_linux.go` or an `import "C"` that are not
+  from that file. Like with the go tool, files starting with `_` or `.` are
+  ignored, the values of files ending in `_test.go` are not read, and
+  neither are files with a `//go:build` line, a file name suffix like `_linux.go` or an `import "C"` that are not
   compiled in every build of the file of the enum type, like the go tool sets
   build tags for one GOOS, GOARCH, Go version and compiler, see the README
   section "Values in Other Files". Files with `//go:build ignore` are not part
@@ -109,7 +109,9 @@ are unchanged:
   Unmarked methods in other files that would be generated are an error,
   because only the file declaring the enum type is rewritten.
 - Untyped consts converted to the enum type from an imported value, like
-  `MethodGet = Method(http.MethodGet)`, are enum values.
+  `MethodGet = Method(http.MethodGet)`, are enum values. Untyped consts
+  computed from them with an operator or with `min` or `max`, like
+  `MethodGetX = MethodGet + "X"`, can't be evaluated and are an error.
 - Enum values are evaluated with `go/types`: consts declared with `iota` and
   implicit repetition, like `KindB` after `KindA Kind = iota`, conversions
   like `FlagD = Flag(0x10)` and other constant expressions are enum values,
@@ -165,10 +167,12 @@ are unchanged:
 - Files are written to a temporary file that is synced to disk and replaces
   the file, so an interrupted run or a crash can't leave a truncated source
   file. Read-only files are not rewritten, like before, and a file in a
-  directory without write permission is written in place. The owner and group
+  directory without write permission, or of another user in a directory with
+  the sticky bit like `/tmp`, is written in place. The owner and group
   of a rewritten file are kept as far as the process is permitted to change
-  them. A rewritten file that was hard linked is no longer linked to its
-  other paths.
+  them, and a file whose group can't be kept is written in place. A
+  rewritten file that was hard linked is no longer linked to its other
+  paths.
 - Marker comments at other places than the end of a type or const line or
   the doc comment of a method, like `) //#null`, are errors instead of being
   ignored.
@@ -208,14 +212,16 @@ are unchanged:
   `vendor` directories and nested modules like `./...` of the go tool,
   so vendored packages are never rewritten. An error in one package no
   longer stops the others: all errors and, with `-validate`, all outdated
-  enums are reported. `./...` without any Go files is an error, and the
-  root of `./...` may be a symlink, like a symlinked checkout.
+  enums are reported. `./...` without any Go files is an error, but not
+  with only test files like a test-only module, and the root of `./...`
+  may be a symlink, like a symlinked checkout.
 - More than one path argument, like `go-enum ./... -validate` with the option
   after the path, is an error with exit code 2 instead of ignoring the
   other arguments, which rewrote the files instead of validating them.
 - The internal `_test.go` files of the package are read for methods and
   package-level names that would collide with the generated methods in test
-  builds, which is an error. Their values are still not used.
+  builds, which is an error. Their values are still not used, and a test
+  file that doesn't parse, like one being edited, is skipped.
 - A file path argument that is not a Go file of its package, like a
   `_test.go` file, is an error instead of silently doing nothing.
 - No longer depends on github.com/ungerik/go-astvisit. Imports of a rewritten
