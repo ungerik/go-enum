@@ -17,7 +17,8 @@ of the enums declared in that file.
 # Options
 
 	-verbose    Print information about what's happening
-	-debug      Insert debug comments in generated code
+	-debug      Show the replaced source before every generated method
+	            like a merge conflict, only with -print because it is no Go code
 	-print      Print every file that would change to stdout instead of writing it
 	-validate   Check for missing or outdated enum methods without modifying files.
 	            Reports issues to stderr and exits with code 1 if any are found.
@@ -28,7 +29,8 @@ of the enums declared in that file.
 
 	0   Success (no issues found in validate mode, or generation completed successfully)
 	1   Error occurred (validation failed, file not found, invalid syntax, etc.)
-	2   -help was used, an option is invalid or more than one path was given
+	2   -help was used, an option is invalid, -debug was used without -print,
+	    or more than one path was given
 
 # Enum Definition
 
@@ -123,6 +125,11 @@ func main() {
 		verboseOut io.Writer
 		resultOut  io.Writer
 	)
+	if debug && !printOnly && !validate {
+		// The debug output is no Go code and would break the source files
+		fmt.Fprintln(os.Stderr, "go-enum error: -debug needs -print, because its output is no Go code")
+		os.Exit(2)
+	}
 	if args := flag.Args(); len(args) > 1 {
 		// Options after the path are no options for the flag package
 		fmt.Fprintf(os.Stderr, "go-enum error: expected at most one path argument, got %d, options must come before the path\n", len(args))

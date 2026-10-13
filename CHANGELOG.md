@@ -250,10 +250,13 @@ are unchanged:
   receiver or parameter names: `j` for a type like `JobState` collided with
   the parameter of `UnmarshalJSON`, a parameter like `value` of `Scan`
   collided with an enum type, its underlying type, a type argument of it or
-  an enum value of that name, a blank receiver `_` of an existing method was used, and a receiver
-  of an existing method named like an enum const or a package used by the
-  generated methods, like `x` or `fmt`, was used, which made `Valid()`
-  accept every value or not compile.
+  an enum value of that name, a blank receiver `_` of an existing method
+  was used, and a receiver of an existing method named like an enum const
+  or a package used by the generated methods, like `x` or `fmt`, was used,
+  which made `Valid()` accept every value or not compile.
+- `-debug` without `-print` wrote its merge conflict markers into the
+  source files, which no longer parsed. It is now an error with exit code
+  2, and `Rewrite` returns an error for debug without a `resultOut`.
 - A generic enum type is an error that says so, instead of having no typed
   const enum values.
 - Hand-written `Scan` and `Value` methods of nullable enums that are neither

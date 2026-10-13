@@ -2580,6 +2580,21 @@ func TestRewrite_PrintErrorKeepsOtherErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate enum value")
 }
 
+// TestRewrite_DebugNeedsResultOut verifies that the debug output, which
+// shows replaced source like a merge conflict and is no Go code, is never
+// written to the source files, which would no longer parse.
+func TestRewrite_DebugNeedsResultOut(t *testing.T) {
+	source := "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
+	dir := writeFiles(t, map[string]string{"status.go": source})
+	require.ErrorContains(t, Rewrite(dir, nil, nil, true), "debug output")
+	assert.Equal(t, source, readFile(t, dir, "status.go"))
+
+	var result bytes.Buffer
+	require.NoError(t, Rewrite(dir, nil, &result, true))
+	assert.Contains(t, result.String(), "<<<<<<< ")
+	assert.Equal(t, source, readFile(t, dir, "status.go"))
+}
+
 // TestRewrite_ReplacesFileThroughRename verifies that a rewritten file is
 // replaced by the temporary file, so that an interrupted write can't leave
 // a truncated source file, which a hard link to the old file shows.

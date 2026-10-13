@@ -455,7 +455,7 @@ Only one path argument is supported, and options must come before it, so `go-enu
 
 Options:
 - `-verbose`: Print the parsed package directories and the changed or unchanged files to stdout
-- `-debug`: Insert debug comments in generated code
+- `-debug`: Show the replaced source before every generated method like a merge conflict. Only with `-print`, because the output is no Go code
 - `-print`: Print the complete content of every file that would change to stdout instead of writing it, up-to-date files are not printed
 - `-validate`: Check for missing or outdated enum methods without modifying files. Reports issues to stderr and exits with code 1 if any are found. Intended for CI.
 - `-help`: Print the options
@@ -463,7 +463,7 @@ Options:
 Exit codes:
 - `0` — Success (no issues found in `-validate` mode, or generation completed)
 - `1` — Error occurred (validation failed, file not found, invalid syntax, etc.)
-- `2` — `-help` was used, an option is invalid or more than one path was given (`-h` prints the usage and exits with `0`)
+- `2` — `-help` was used, an option is invalid, `-debug` was used without `-print`, or more than one path was given (`-h` prints the usage and exits with `0`)
 
 Examples:
 

@@ -41,8 +41,13 @@ import (
 //     append "..." to process all package directories below a directory
 //   - verboseOut: Writer for verbose progress output (nil to disable)
 //   - resultOut: Writer for generated code output (nil to write to files)
-//   - debug: If true, inserts debug comments in generated code
+//   - debug: If true, shows the replaced source before every generated
+//     method like a merge conflict, which is no Go code, so it needs resultOut
 func Rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool) error {
+	if debug && resultOut == nil {
+		// Like go-astvisit, which refuses to write debug output to files
+		return errors.New("debug output is no Go code and must not overwrite source files, it needs a resultOut")
+	}
 	return rewrite(path, verboseOut, resultOut, debug, false)
 }
 
@@ -56,7 +61,7 @@ func Rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool)
 //   - path: Directory or file path to process (defaults to current directory),
 //     append "..." to process all package directories below a directory
 //   - verboseOut: Writer for verbose progress output (nil to disable)
-//   - debug: If true, inserts debug comments in generated code
+//   - debug: Has no effect, because no code is written
 //
 // Returns an error if any enum methods are missing or outdated.
 func ValidateRewrite(path string, verboseOut io.Writer, debug bool) error {

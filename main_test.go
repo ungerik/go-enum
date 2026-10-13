@@ -56,6 +56,24 @@ func TestMain_OptionAfterPath(t *testing.T) {
 	assert.Equal(t, 1, exitCode, "outdated methods")
 }
 
+// TestMain_DebugNeedsPrint verifies that -debug, whose output is no Go code,
+// can't overwrite the source files, which would no longer parse.
+func TestMain_DebugNeedsPrint(t *testing.T) {
+	dir := t.TempDir()
+	source := "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "status.go"), []byte(source), 0644))
+
+	exitCode, output := runGoEnum(t, dir, "-debug", ".")
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, output, "-debug needs -print")
+	exitCode, output = runGoEnum(t, dir, "-debug", "-print", ".")
+	assert.Equal(t, 0, exitCode, output)
+	assert.Contains(t, output, "<<<<<<< ")
+	written, err := os.ReadFile(filepath.Join(dir, "status.go"))
+	require.NoError(t, err)
+	assert.Equal(t, source, string(written))
+}
+
 // Value: protects=the command checks and rewrites the package of its path argument, and without one the current directory like for //go:generate go-enum;
 // fails_when=main ignores the path argument or needs one, so a CI -validate path or a go:generate run checks or rewrites the wrong directory or fails;
 // why_new=TestMain_OptionAfterPath only passes "." from the package directory, and no test runs the command without -validate;
