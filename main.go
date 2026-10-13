@@ -9,11 +9,16 @@ using the Go AST and go/types.
 
 	go-enum [options] [path]
 
+The path is a package directory, by default the current directory,
+a directory followed by "..." like ./... for the packages in all
+directories below it, or a Go file to generate only the methods
+of the enums declared in that file.
+
 # Options
 
 	-verbose    Print information about what's happening
 	-debug      Insert debug comments in generated code
-	-print      Print generated code to stdout instead of writing files
+	-print      Print every file that would change to stdout instead of writing it
 	-validate   Check for missing or outdated enum methods without modifying files.
 	            Reports issues to stderr and exits with code 1 if any are found.
 	            Useful for CI validation to ensure all enums have up-to-date methods.
@@ -23,6 +28,7 @@ using the Go AST and go/types.
 
 	0   Success (no issues found in validate mode, or generation completed successfully)
 	1   Error occurred (validation failed, file not found, invalid syntax, etc.)
+	2   -help was used or an option is invalid
 
 # Enum Definition
 
@@ -34,6 +40,19 @@ Mark a type as an enum with the //#enum comment:
 		StatusPending Status = "pending"
 		StatusActive  Status = "active"
 	)
+
+The values are all consts of exactly that type, also with iota or conversions,
+in the files of the package that are compiled in every build of the file of the
+enum type. The generated methods are written to the file of the enum type.
+
+# Markers
+
+	//#enum             at the end of a type line marks an enum type
+	//#enum,jsonschema  also generates a JSONSchema method
+	//#null             at the end of a const line marks the null value
+	//#exclude          at the end of a const line excludes the const from the values
+	//#custom           in the doc comment of a method keeps a hand-written
+	                    version of a method that would be generated
 
 # Generated Methods
 
@@ -51,7 +70,7 @@ For nullable enums (marked with //#null):
   - IsNotNull() bool
   - SetNull()
   - MarshalJSON/UnmarshalJSON
-  - Scan/Value for database/sql
+  - Scan/Value for database/sql (string and integer enums)
 
 For enums with ,jsonschema flag:
   - JSONSchema() *jsonschema.Schema

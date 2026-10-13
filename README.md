@@ -53,7 +53,7 @@ Run go-enum in your package directory:
 go-enum
 ```
 
-Or specify a path:
+Or specify a path, like `./...` for all packages below the current directory:
 
 ```bash
 go-enum ./path/to/package
@@ -365,16 +365,24 @@ Rules:
 go-enum [options] [path]
 ```
 
+The path is one of:
+- A package directory, by default the current directory `.`: the methods of all enums of the package are generated.
+- A directory followed by `...`, like `./...`: the methods of the packages in that directory and in all directories below it are generated. Like with the go tool, directories starting with `.` or `_`, `testdata`, `vendor` and `node_modules` directories and directories of nested modules with their own `go.mod` are skipped, and directories without Go files are ignored. A single directory without Go files is an error.
+- A Go file: only the methods of the enums declared in that file are generated. The other files of its package are still read for enum values and existing methods. A file that is not a Go file of the package, like a `_test.go` file, is an error.
+
+Only the first path argument is used.
+
 Options:
-- `-verbose`: Print information about what's happening
+- `-verbose`: Print the parsed package directories and the changed or unchanged files to stdout
 - `-debug`: Insert debug comments in generated code
-- `-print`: Print generated code to stdout instead of writing files
+- `-print`: Print the complete content of every file that would change to stdout instead of writing it, up-to-date files are not printed
 - `-validate`: Check for missing or outdated enum methods without modifying files. Reports issues to stderr and exits with code 1 if any are found. Intended for CI.
-- `-help`: Show help message
+- `-help`: Print the options
 
 Exit codes:
 - `0` — Success (no issues found in `-validate` mode, or generation completed)
 - `1` — Error occurred (validation failed, file not found, invalid syntax, etc.)
+- `2` — `-help` was used or an option is invalid (`-h` prints the usage and exits with `0`)
 
 Examples:
 
@@ -420,6 +428,9 @@ go-enum -validate ./...
 | `UnmarshalJSON([]byte) error` | JSON unmarshaling with null support |
 | `Scan(any) error` | `database/sql.Scanner` implementation |
 | `Value() (driver.Value, error)` | `database/sql/driver.Valuer` implementation |
+
+`Scan` and `Value` are only generated for string and integer enums,
+see [Supported Types](#supported-types).
 
 ### For JSON Schema Enums
 
@@ -517,6 +528,39 @@ weekdayOptions := Weekday("").EnumStrings()
 // Returns: []string{"monday", "tuesday", ...}
 ```
 
+### Values with `iota` and Conversions
+
+Values are evaluated like by the Go compiler, so `iota`, implicitly repeated
+consts and conversions work:
+
+```go
+type Priority int //#enum
+
+const (
+	PriorityLow Priority = iota + 1
+	PriorityMedium
+	PriorityHigh
+)
+```
+
+`Priority(0).EnumStrings()` returns the evaluated values `"1"`, `"2"` and `"3"`.
+
+A value converted from a const of an imported package is an enum value too.
+Imported packages are not loaded, so such a value is referenced by its name
+in the generated methods:
+
+```go
+type Method string //#enum
+
+const (
+	MethodGet  = Method(http.MethodGet)
+	MethodPost = Method(http.MethodPost)
+)
+```
+
+Here `EnumStrings()` returns `string(MethodGet)` and `string(MethodPost)`,
+which are `"GET"` and `"POST"`.
+
 ## How It Works
 
 1. **AST Parsing**: go-enum parses the Go source files of a package using Go's AST
@@ -533,6 +577,8 @@ The tool is smart about updates:
 - Preserves your file structure and other code
 - The files of a package are only written after the methods of all its enums were generated without error
 - When generated methods are already up to date, the file is left byte-identical — no import reordering, no whitespace churn. Safe to run in `go generate` on every build.
+- A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error.
+- A file with CRLF line endings, like in a Windows checkout, keeps them. A file with only some CRLF line endings gets LF line endings, like with gofmt.
 
 ## Best Practices
 
@@ -593,6 +639,10 @@ Float and bool-based enums get all methods except `String` and the nullable `Sca
 - Only one null value per enum type
 - Enum values in other files that are not compiled in every build of the file of the enum type are not used, and methods the generator would produce in other files must be marked `//#custom` (see [Values in Other Files](#values-in-other-files)). Every combination of build tags other than GOOS, GOARCH, `go1.N`, `gc` and `gccgo`, like `cgo` or custom tags, is evaluated, so with more than 12 of them in the build constraints of two files, the values of the other file are not used, its methods are compared like the methods of files compiled together with the enum type, and its `//#custom` methods are reported as missing in some builds
 - The receiver name is taken from existing methods, else it is the first letter of the type name in lowercase, or `e`, `recv`, `e1`, `e2` and so on if that collides with an identifier used by the generated methods
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the changes of each release.
 
 ## License
 
