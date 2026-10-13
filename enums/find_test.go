@@ -2630,6 +2630,14 @@ func TestFind_TypeDeclaredTwice(t *testing.T) {
 	assert.Contains(t, err.Error(), "declared more than once")
 }
 
+func TestFind_GenericEnumType(t *testing.T) {
+	// The consts of a generic type need an instantiated type,
+	// which must be named instead of reporting no enum values
+	fset, files, astFile := parseSource(t, "package example\n\ntype Status[T any] string //#enum\n\nconst StatusA Status[int] = \"a\"\n")
+	_, err := findInFile(fset, files, astFile)
+	require.ErrorContains(t, err, "enum type Status in test.go:3 can't be generic")
+}
+
 func TestFind_StrayMarkerComments(t *testing.T) {
 	// A marker that is not attached to a const or type would be ignored
 	// silently, so a sentinel would become valid or nullability get lost

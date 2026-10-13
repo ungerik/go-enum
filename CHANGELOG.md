@@ -98,11 +98,13 @@ are unchanged:
   compiled in every build of the file declaring the enum type instead of only
   from that file. Like with the go tool, files starting with `_` or `.` are
   ignored, the values of files ending in `_test.go` are not read, and
-  neither are files with a `//go:build` line, a file name suffix like `_linux.go` or an `import "C"` that are not
-  compiled in every build of the file of the enum type, like the go tool sets
-  build tags for one GOOS, GOARCH, Go version and compiler, see the README
-  section "Values in Other Files". Files with `//go:build ignore` are not part
-  of the package. An invalid build constraint is an error.
+  neither are files with a `//go:build` line, a file name suffix like
+  `_linux.go` or an `import "C"` that are not compiled in every build of the
+  file of the enum type, like the go tool sets build tags for one GOOS,
+  GOARCH, Go version and compiler, see the README section "Values in Other
+  Files". Files with `//go:build ignore` are not part of the package, and
+  like with go build they don't need to parse unless they have an enum
+  marker. An invalid build constraint is an error.
 - Methods marked with `//#custom` in other files of the package, also in
   files with build constraints like one per platform, are not generated
   again, and must be declared in every build of the file of the enum type.
@@ -247,11 +249,13 @@ are unchanged:
 - Generated methods that did not compile or were wrong because of the
   receiver or parameter names: `j` for a type like `JobState` collided with
   the parameter of `UnmarshalJSON`, a parameter like `value` of `Scan`
-  collided with an enum type, its underlying type or an enum value of that
-  name, a blank receiver `_` of an existing method was used, and a receiver
+  collided with an enum type, its underlying type, a type argument of it or
+  an enum value of that name, a blank receiver `_` of an existing method was used, and a receiver
   of an existing method named like an enum const or a package used by the
   generated methods, like `x` or `fmt`, was used, which made `Valid()`
   accept every value or not compile.
+- A generic enum type is an error that says so, instead of having no typed
+  const enum values.
 - Hand-written `Scan` and `Value` methods of nullable enums that are neither
   string nor integer based were removed.
 - Generating methods in a file with CRLF line endings converted the whole

@@ -2,6 +2,7 @@ package enums
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -2559,6 +2560,26 @@ func (s Status) String() string { return string(s) }
 	requireBuilds(t, dir)
 }
 
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// TestRewrite_PrintErrorKeepsOtherErrors verifies that an error writing
+// the result with -print doesn't hide the errors of the packages before.
+func TestRewrite_PrintErrorKeepsOtherErrors(t *testing.T) {
+	dir := t.TempDir()
+	for name, source := range map[string]string{
+		"p0": "package p0\n\ntype Status string //#enum\n\nconst (\n\tStatusA Status = \"a\"\n\tStatusB Status = \"a\"\n)\n",
+		"p1": "package p1\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+	} {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name, "status.go"), []byte(source), 0644))
+	}
+	err := Rewrite(dir+"/...", nil, errWriter{}, false)
+	require.ErrorContains(t, err, "broken pipe")
+	assert.Contains(t, err.Error(), "duplicate enum value")
+}
+
 // TestRewrite_ReplacesFileThroughRename verifies that a rewritten file is
 // replaced by the temporary file, so that an interrupted write can't leave
 // a truncated source file, which a hard link to the old file shows.
@@ -2904,6 +2925,34 @@ const (
 	StatusA    Status = "a"
 )
 `,
+		// The receiver and the parameters of the generated methods must not
+		// shadow a type argument of the underlying type, which they print
+		"type argument named like a parameter": `package example
+
+type box[T any] string
+
+type j string
+
+type Status box[j] //#enum
+
+const (
+	StatusNone Status = "" //#null
+	StatusA    Status = "a"
+)
+`,
+		"type argument named like the receiver": `package example
+
+type box[T any] string
+
+type k string
+
+type Key box[k] //#enum
+
+const (
+	KeyNone Key = "" //#null
+	KeyA    Key = "a"
+)
+`,
 		"alternative with _": `package example
 
 type kind string //#enum
@@ -3035,6 +3084,32 @@ func TestRewrite_InternalTestFileWithSyntaxError(t *testing.T) {
 	dir = writeFiles(t, map[string]string{"status_test.go": "package example\n\nfunc TestX(t *testing.T) {\n"})
 	require.ErrorContains(t, ValidateRewrite(dir, nil, false), "no non-test Go files in")
 	require.NoError(t, ValidateRewrite(dir+"/...", nil, false))
+}
+
+// TestRewrite_NeverBuiltFileWithSyntaxError verifies that, like with go
+// build, a file that is compiled in no build, like a template for go run
+// with //go:build ignore, is not parsed and doesn't stop generating the
+// methods, while a file of some builds that doesn't parse still fails.
+func TestRewrite_NeverBuiltFileWithSyntaxError(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"status.go": "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"gen.go":    "//go:build ignore\n\npackage main\n\nfunc main() {\n\t{{.Template}}\n}\n",
+	})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+
+	dir = writeFiles(t, map[string]string{
+		"status.go":    "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"gen_linux.go": "package example\n\nfunc main() {\n\t{{.Template}}\n}\n",
+	})
+	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "gen_linux.go")
+
+	// An enum type in a file with //go:build ignore gets its methods,
+	// so such a file that doesn't parse must fail
+	dir = writeFiles(t, map[string]string{
+		"status.go": "//go:build ignore\n\npackage main\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n\nfunc main() {\n",
+	})
+	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "status.go")
 }
 
 // TestRewrite_RecursiveReportsAllPackages verifies that an error in one

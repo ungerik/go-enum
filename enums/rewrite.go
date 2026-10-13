@@ -150,7 +150,8 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 			fprintf(verboseOut, "changed file: %s\n", filePath)
 			if resultOut != nil {
 				if _, err := resultOut.Write(results[filePath]); err != nil {
-					return err
+					// With the errors of the packages before
+					return errors.Join(append(errs, err)...)
 				}
 				continue
 			}
@@ -221,8 +222,8 @@ func packageDirs(path string) (dirs []string, file string, recursive bool, err e
 // and renames it to filePath, so that an interrupted write can't leave
 // a truncated source file. The file mode of filePath is kept. Without
 // permission to create a file in the directory, or if the temporary file
-// can't get the group of filePath or can't replace it, like a bind mounted
-// file, filePath is written in place without that guarantee.
+// can't get the group of filePath or has no permission to replace it, like
+// a bind mounted file, filePath is written in place without that guarantee.
 func writeFile(filePath string, data []byte) error {
 	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
 		filePath = resolved
@@ -272,12 +273,26 @@ func writeFile(filePath string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), filePath); err != nil {
+	if err := os.Rename(tmp.Name(), filePath); errors.Is(err, fs.ErrPermission) || isNotReplaceable(err) {
 		// Like the file of another user in a sticky directory,
-		// or a bind mounted file
+		// or a bind mounted file, which can't be replaced
 		return writeInPlace(filePath, data)
+	} else if err != nil {
+		// Like a full disk, where writing in place could truncate the file
+		return err
 	}
 	return nil
+}
+
+// neverBuilt reports whether a file is compiled in no build, like a
+// template for go run with //go:build ignore, by its build constraints.
+func neverBuilt(fset *token.FileSet, filePath string, source []byte) bool {
+	header, err := parser.ParseFile(fset, filePath, source, parser.PackageClauseOnly|parser.ParseComments)
+	if err != nil {
+		return false
+	}
+	c, err := buildConstraint(fset, filePath, header)
+	return err == nil && !compatible(c, c)
 }
 
 // writeInPlace writes data to the existing file filePath like os.WriteFile,
@@ -353,6 +368,11 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 		// With object resolution for usedPackageNames
 		file, err := parser.ParseFile(fset, filePath, source, parser.ParseComments)
 		if err != nil {
+			if !bytes.Contains(source, []byte("#enum")) && neverBuilt(fset, filePath, source) {
+				// Like go build, which doesn't parse a file it never compiles,
+				// unless it has enums to generate methods for
+				continue
+			}
 			return nil, nil, nil, err
 		}
 		files[filePath] = file

@@ -47,9 +47,9 @@ type Enum struct {
 
 	// basic is the underlying basic type
 	basic *types.Basic
-	// underlyingName is the name of the underlying type without
-	// type arguments, like j of j[int]
-	underlyingName string
+	// underlyingNames are the identifiers of the underlying type,
+	// like j and k of j[k], which generated names must not shadow
+	underlyingNames []string
 	// insertAfter is the declaration of the last enum const
 	// in the file of the enum type, or the type declaration
 	// if that file has no enum consts
@@ -126,7 +126,7 @@ func (e *Enum) JSONType() string {
 // name, type name or enum value.
 func (e *Enum) Param(name, alternative string) string {
 	used := func(candidate string) bool {
-		return candidate == e.Recv || candidate == e.Type || candidate == e.underlyingName ||
+		return candidate == e.Recv || candidate == e.Type || slices.Contains(e.underlyingNames, candidate) ||
 			slices.ContainsFunc(e.Values, func(v *Value) bool { return v.Name == candidate })
 	}
 	if !used(name) {

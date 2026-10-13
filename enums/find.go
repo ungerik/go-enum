@@ -248,20 +248,17 @@ func findMarker(group *ast.CommentGroup) *ast.Comment {
 	return nil
 }
 
-// baseTypeName returns the name of a type expression without type
-// arguments and parentheses, like j of j[int], or an empty string.
-func baseTypeName(x ast.Expr) string {
-	switch x := x.(type) {
-	case *ast.Ident:
-		return x.Name
-	case *ast.ParenExpr:
-		return baseTypeName(x.X)
-	case *ast.IndexExpr:
-		return baseTypeName(x.X)
-	case *ast.IndexListExpr:
-		return baseTypeName(x.X)
-	}
-	return ""
+// typeIdents returns the identifiers of a type expression,
+// like j and k of j[k].
+func typeIdents(x ast.Expr) []string {
+	var idents []string
+	ast.Inspect(x, func(n ast.Node) bool {
+		if ident, ok := n.(*ast.Ident); ok {
+			idents = append(idents, ident.Name)
+		}
+		return true
+	})
+	return idents
 }
 
 // constTypeName returns the name of the explicit type of a const, or of the
@@ -384,22 +381,25 @@ func newEnum(fset *token.FileSet, info *types.Info, pkgFiles, methodFiles []*ast
 	if obj == nil || typeSpec.spec.Assign.IsValid() {
 		return nil, fmt.Errorf("enum type %s in %s:%d must be a type definition, not an alias", typeName, typePos.Filename, typePos.Line)
 	}
+	if typeSpec.spec.TypeParams != nil {
+		return nil, fmt.Errorf("enum type %s in %s:%d can't be generic, because its consts need an instantiated type", typeName, typePos.Filename, typePos.Line)
+	}
 	basic, _ := obj.Type().Underlying().(*types.Basic)
 	if basic == nil || basic.Kind() == types.Invalid || basic.Info()&types.IsComplex != 0 {
 		return nil, fmt.Errorf("enum type %s in %s:%d needs a string, integer, float or bool type of the package as underlying type, not %s",
 			typeName, typePos.Filename, typePos.Line, types.ExprString(typeSpec.spec.Type))
 	}
 	enum := &Enum{
-		File:           typePos.Filename,
-		Line:           typePos.Line,
-		Package:        file.Name.Name,
-		Type:           typeName,
-		Underlying:     types.ExprString(typeSpec.spec.Type),
-		underlyingName: baseTypeName(typeSpec.spec.Type),
-		JSONSchema:     typeSpec.jsonSchema,
-		CustomMethods:  make(map[string]bool),
-		basic:          basic,
-		insertAfter:    typeSpec.decl,
+		File:            typePos.Filename,
+		Line:            typePos.Line,
+		Package:         file.Name.Name,
+		Type:            typeName,
+		Underlying:      types.ExprString(typeSpec.spec.Type),
+		underlyingNames: typeIdents(typeSpec.spec.Type),
+		JSONSchema:      typeSpec.jsonSchema,
+		CustomMethods:   make(map[string]bool),
+		basic:           basic,
+		insertAfter:     typeSpec.decl,
 	}
 	if err := enum.findValues(fset, info, pkgFiles, enumSpecs, file, obj.Type()); err != nil {
 		return nil, err
@@ -801,7 +801,7 @@ func (e *Enum) findMethods(fset *token.FileSet, methodFiles []*ast.File, constra
 // generated methods without shadowing an identifier that they use,
 // like an enum value in Valid() or the fmt package in Validate().
 func (e *Enum) usableRecv(name string) bool {
-	if name == "" || name == "_" || name == e.Type || name == e.underlyingName || types.Universe.Lookup(name) != nil {
+	if name == "" || name == "_" || name == e.Type || slices.Contains(e.underlyingNames, name) || types.Universe.Lookup(name) != nil {
 		return false
 	}
 	if _, ok := generatorImports[name]; ok {
