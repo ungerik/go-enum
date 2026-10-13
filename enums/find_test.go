@@ -932,7 +932,7 @@ const SigShared Sig = 4
 	assert.Equal(t, []string{"SigA", "SigDarwinOnly", "SigShared"}, valueNames(enums["Sig"]))
 
 	// Value: protects=a second run on per-platform declarations of an enum type with generated methods only uses the methods of its own file;
-	// fails_when=findMethods also reads files declaring the enum type again, so the other platform's Valid fails as "would be generated again";
+	// fails_when=findMethods reads the methods of the other platform's declaration, which compatible() excludes for linux and darwin, so the other platform's Valid fails as "would be generated again";
 	// why_new=the fixture above has no methods and no other test declares an enum type in two files with methods;
 	// seam=none;
 	// no_claim=does not build the per-platform methods
@@ -1637,6 +1637,29 @@ const StatusA, StatusB Status = "", "b" //#null
 	assert.Contains(t, err.Error(), "cant use //#null for multiple enums in test.go:5")
 }
 
+// Value: protects=only the names of a multi-name const spec that are of the enum type become values, not maxRetries in `StatusA, maxRetries = Status("a"), 3`;
+// fails_when=findValues drops the per-name isEnumConst check because the spec already has an enum const, so other consts become values;
+// why_new=no test has a const spec mixing enum and other consts; coverage shows the skip of a non-enum name in findValues never runs;
+// seam=none;
+// no_claim=does not build the generated methods, only checks the values found
+func TestFind_MultiNameConstWithOtherTypes(t *testing.T) {
+	// A const spec can declare an enum const together with consts of other
+	// types. As enum values, an int const would make Valid() not compile and
+	// an untyped string const would silently become a valid value.
+	fset, files, astFile := parseSource(t, `package example
+
+type Status string //#enum
+
+const (
+	StatusA, maxRetries = Status("a"), 3
+	StatusB, label      = Status("b"), "label"
+)
+`)
+	enums, err := findInFile(fset, files, astFile)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"StatusA", "StatusB"}, valueNames(enums["Status"]))
+}
+
 func TestFind_EnumTypeInIgnoredFile(t *testing.T) {
 	// Like the go tool, files starting with _ are ignored,
 	// so no methods are generated for their enum types
@@ -2135,6 +2158,109 @@ func (s Status) String() string {
 	}
 }
 
+func TestFind_MarkerOnExpressionTypedEnumConst(t *testing.T) {
+	// go/types gives these consts the enum type through their expression,
+	// so they are enum values and their markers must not be rejected as
+	// markers of consts without enum type
+	for name, consts := range map[string]string{
+		"derived":                "\tKindB = KindA + 1 //#exclude\n",
+		"alias":                  "\tKindDefault = KindA //#exclude\n",
+		"parenthesized":          "\tKindC = (Kind)(3) //#exclude\n",
+		"other name in the spec": "\tmaxRetries, KindB = 3, Kind(2) //#exclude\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fset, files, astFile := parseSource(t, "package example\n\ntype Kind int //#enum\n\nconst (\n\tKindA Kind = 1\n"+consts+")\n")
+			enums, err := findInFile(fset, files, astFile)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"KindA"}, valueNames(enums["Kind"]))
+		})
+	}
+}
+
+func TestFind_MarkersOfConstsInFilesOfSomeBuilds(t *testing.T) {
+	// Values in files that are not compiled in every build of the file of
+	// the enum type are not used, so their markers are not checked with
+	// the values, but a //#null there or a misused marker must not be
+	// ignored silently
+	status := "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
+	for source, message := range map[string]string{
+		"package example\n\nconst StatusNone Status = \"\" //#null\n":             "the //#null enum const StatusNone in status_linux.go:3 must be declared in the file of the enum type",
+		"package example\n\nconst StatusOld Status = \"old\" //#exclude legacy\n": "invalid marker comment \"//#exclude legacy\" for enum const StatusOld in status_linux.go:3",
+	} {
+		fset, files := parseFiles(t, map[string]string{"status.go": status, "status_linux.go": source})
+		_, err := Find(fset, files)
+		require.ErrorContains(t, err, message)
+	}
+}
+
+func TestFind_ConstUsingEnumConversionInOtherType(t *testing.T) {
+	// A const that only uses a conversion to the enum type, like a string
+	// of an enum value, is no enum const, so its unknown value from an
+	// import must not fail generation for the package
+	fset, files, astFile := parseSource(t, `package example
+
+import "net/http"
+
+type Method string //#enum
+
+const (
+	MethodGet     = Method(http.MethodGet)
+	DefaultHeader = "X-" + string(Method(http.MethodGet))
+)
+`)
+	enums, err := findInFile(fset, files, astFile)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"MethodGet"}, valueNames(enums["Method"]))
+}
+
+func TestFind_MethodsOfOtherDeclarationWithCompatibleTags(t *testing.T) {
+	// Custom build tags like oss and ent are exclusive by convention, which
+	// build constraints can't express, so the methods of the other
+	// declaration of the enum type must be ignored instead of failing
+	// as methods that would be generated again
+	fset, files := parseFiles(t, map[string]string{
+		"status_oss.go": "//go:build oss\n\npackage example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"status_ent.go": "//go:build ent\n\npackage example\n\ntype Status string\n\nfunc (s Status) Valid() bool { return true }\n",
+	})
+	enums, err := findInFile(fset, files, files["status_oss.go"])
+	require.NoError(t, err)
+	assert.Equal(t, []string{"StatusA"}, valueNames(enums["Status"]))
+}
+
+func TestFind_MarkerWordInFunctionBody(t *testing.T) {
+	// Comments in function bodies are no markers,
+	// so a marker word there must not fail the package
+	fset, files, astFile := parseSource(t, "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n\nfunc f() {\n\t// #exclude archived values below\n\t_ = StatusA\n}\n")
+	_, err := findInFile(fset, files, astFile)
+	require.NoError(t, err)
+}
+
+func TestFind_InternalTestFiles(t *testing.T) {
+	// go test compiles the internal test files of the package together with
+	// the generated methods, so a method or a package-level name there that
+	// collides with them would only fail in test builds, while their values
+	// are not compiled in regular builds and are no enum values
+	status := "package example\n\ntype Status string //#enum\n\nconst (\n\tStatusNone   Status = \"\" //#null\n\tStatusActive Status = \"active\"\n)\n"
+	for source, message := range map[string]string{
+		"package example\n\nfunc (s Status) String() string { return \"test\" }\n": "method Status.String in status_test.go:3 of a test file would be declared twice in test builds with the method generated in status.go",
+		"package example\n\nconst driver = \"sqlite3\"\n":                          "driver in status_test.go:3 has the name of the package database/sql/driver",
+	} {
+		fset, files := parseFiles(t, map[string]string{"status.go": status, "status_test.go": source})
+		_, err := Find(fset, files)
+		require.ErrorContains(t, err, message)
+	}
+
+	// Other methods and the external test package are fine
+	fset, files := parseFiles(t, map[string]string{
+		"status.go":          status,
+		"status_test.go":     "package example\n\nconst StatusTestOnly Status = \"test\"\n\nfunc (s Status) Label() string { return \"label\" }\n",
+		"status_ext_test.go": "package example_test\n\nconst driver = \"sqlite3\"\n",
+	})
+	enums, err := findInFile(fset, files, files["status.go"])
+	require.NoError(t, err)
+	assert.Equal(t, []string{"StatusNone", "StatusActive"}, valueNames(enums["Status"]))
+}
+
 func TestFind_AnnotationOfOtherToolAfterGofmt(t *testing.T) {
 	// gofmt rewrites //#nosec G115 in a doc comment to // #nosec G115,
 	// which must still be ignored when recognizing a generated method
@@ -2315,6 +2441,28 @@ func (s *Status) UnmarshalJSON(j []byte) error { return json.Unmarshal(j, (*stri
 
 //#custom
 func (s Status) Value() (any, error) { return string(s), nil }
+`,
+		// Two imports can't both have the name json,
+		// so json-patch's package name can't be json
+		"assumed name of the generator package": `package example
+
+import (
+	"encoding/json"
+
+	"github.com/evanphx/json-patch"
+)
+
+var (
+	_ = json.Valid
+	_ = jsonpatch.MergePatch
+)
+
+type Status string //#enum
+
+const (
+	StatusNone   Status = "" //#null
+	StatusActive Status = "active"
+)
 `,
 		"other package name": `package example
 

@@ -75,14 +75,28 @@ type Value struct {
 	Null bool
 }
 
+// basicType returns the basic underlying type, also for an Enum that
+// was not returned by Find and has a predeclared Underlying type.
+func (e *Enum) basicType() *types.Basic {
+	if e.basic != nil {
+		return e.basic
+	}
+	if obj, ok := types.Universe.Lookup(e.Underlying).(*types.TypeName); ok {
+		if basic, ok := obj.Type().(*types.Basic); ok {
+			return basic
+		}
+	}
+	return types.Typ[types.Invalid]
+}
+
 // IsStringType returns true if the underlying type is string.
 func (e *Enum) IsStringType() bool {
-	return e.basic.Info()&types.IsString != 0
+	return e.basicType().Info()&types.IsString != 0
 }
 
 // IsIntType returns true if the underlying type is an integer type.
 func (e *Enum) IsIntType() bool {
-	return e.basic.Info()&types.IsInteger != 0
+	return e.basicType().Info()&types.IsInteger != 0
 }
 
 // IsNullable returns true if the enum has a null value defined.
@@ -97,7 +111,7 @@ func (e *Enum) LastIndex() int {
 
 // JSONType returns the JSON Schema type for this enum's underlying type.
 func (e *Enum) JSONType() string {
-	switch info := e.basic.Info(); {
+	switch info := e.basicType().Info(); {
 	case info&types.IsNumeric != 0:
 		return "number"
 	case info&types.IsBoolean != 0:

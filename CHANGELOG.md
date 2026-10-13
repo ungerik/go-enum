@@ -62,6 +62,8 @@ are unchanged:
 - `Enum.File` is the path of the file declaring the enum type instead of the
   package name.
 - `Enum.LastEnumDecl` and `Enum.KnownMethods` were removed.
+- The files given to `Find` must be parsed with `parser.ParseComments` and
+  without `parser.SkipObjectResolution`.
 
   ```go
   fset := token.NewFileSet()
@@ -162,7 +164,8 @@ are unchanged:
   generated methods that did not compile.
 - Files are written to a temporary file that is synced to disk and replaces
   the file, so an interrupted run or a crash can't leave a truncated source
-  file. Read-only files are not rewritten, like before. The owner and group
+  file. Read-only files are not rewritten, like before, and a file in a
+  directory without write permission is written in place. The owner and group
   of a rewritten file are kept as far as the process is permitted to change
   them. A rewritten file that was hard linked is no longer linked to its
   other paths.
@@ -192,7 +195,9 @@ are unchanged:
   `// #custom` as written by gofmt). Other words, like `//#nosec G101` of
   other tools or a misspelled `//#exlude`, and unknown `//#enum` flags
   are ignored. A marker at a var or at a const that is not of an enum type,
-  like `StatusNone = "" //#null` without type, is an error.
+  like `StatusNone = "" //#null` without type, is an error, and so is a
+  `//#null` const in a file that is not compiled in every build of the file
+  of the enum type.
 - The `//#null` const must be declared in the file of the enum type,
   because it changes which methods are generated in that file.
 - Error messages show the file name instead of the package name, and duplicate
@@ -201,7 +206,16 @@ are unchanged:
   together in declaration order.
 - Recursive mode skips directories starting with `_`, `testdata` and
   `vendor` directories and nested modules like `./...` of the go tool,
-  so vendored packages are never rewritten.
+  so vendored packages are never rewritten. An error in one package no
+  longer stops the others: all errors and, with `-validate`, all outdated
+  enums are reported. `./...` without any Go files is an error, and the
+  root of `./...` may be a symlink, like a symlinked checkout.
+- More than one path argument, like `go-enum ./... -validate` with the option
+  after the path, is an error with exit code 2 instead of ignoring the
+  other arguments, which rewrote the files instead of validating them.
+- The internal `_test.go` files of the package are read for methods and
+  package-level names that would collide with the generated methods in test
+  builds, which is an error. Their values are still not used.
 - A file path argument that is not a Go file of its package, like a
   `_test.go` file, is an error instead of silently doing nothing.
 - No longer depends on github.com/ungerik/go-astvisit. Imports of a rewritten

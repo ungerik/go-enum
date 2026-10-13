@@ -194,7 +194,7 @@ const StatusActive Status = "active"
 	}
 	fmt.Println(enums.ValidateRewrite(filePath, nil, false))
 	// Output:
-	// found 1 missing or outdated enum method(s)
+	// found 1 enum type(s) with missing or outdated methods
 	// <nil>
 }
 

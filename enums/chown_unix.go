@@ -12,6 +12,9 @@ import (
 // as far as the process is permitted to.
 func chownLike(f *os.File, info fs.FileInfo) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		_ = f.Chown(int(stat.Uid), int(stat.Gid))
+		// Without permission for the owner, keep at least the group
+		if f.Chown(int(stat.Uid), int(stat.Gid)) != nil {
+			_ = f.Chown(-1, int(stat.Gid))
+		}
 	}
 }

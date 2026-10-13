@@ -623,7 +623,7 @@ const (
 	// Run ValidateRewrite - should fail
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 func TestValidateRewrite_UpToDateMethods(t *testing.T) {
@@ -680,7 +680,7 @@ func (s Status) Valid() bool {
 	// Run ValidateRewrite - should fail because method is outdated
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 func TestValidateRewrite_NoEnums(t *testing.T) {
@@ -794,7 +794,7 @@ const (
 	// Run ValidateRewrite - should fail because Priority is missing methods
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 func TestValidateRewrite_VerboseOutput(t *testing.T) {
@@ -900,7 +900,7 @@ func (s Status) String() string {
 	// Validate - should now fail because methods don't include StatusCompleted
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err, "validation should fail when new enum value is added but methods aren't updated")
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 func TestValidateRewrite_OutdatedAfterChangingEnumValue(t *testing.T) {
@@ -980,7 +980,7 @@ func (s Status) String() string {
 	// Validate - should fail because EnumStrings still has "active" instead of "running"
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err, "validation should fail when enum value is changed but methods aren't updated")
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 func TestValidateRewrite_OutdatedAfterRemovingEnumValue(t *testing.T) {
@@ -1061,7 +1061,7 @@ func (s Status) String() string {
 	// Validate - should fail because methods still reference StatusCompleted
 	err = ValidateRewrite(tmpDir, nil, false)
 	require.Error(t, err, "validation should fail when enum value is removed but methods aren't updated")
-	assert.Contains(t, err.Error(), "missing or outdated enum method")
+	assert.Contains(t, err.Error(), "enum type(s) with missing or outdated methods")
 }
 
 // TestRewriteNoOpDoesNotReorderImports verifies that running Rewrite on a
@@ -1434,7 +1434,7 @@ const (
 	require.NoError(t, os.WriteFile(valuesFile, []byte(valuesSource+`
 const StatusDone Status = "done"
 `), 0644))
-	require.ErrorContains(t, ValidateRewrite(tmpDir, nil, false), "missing or outdated enum method")
+	require.ErrorContains(t, ValidateRewrite(tmpDir, nil, false), "enum type(s) with missing or outdated methods")
 }
 
 // TestRewrite_ExcludeMarker verifies that consts marked with //#exclude
@@ -1938,6 +1938,18 @@ const (
 	})
 	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "second //#null")
 	assert.Equal(t, valid, readFile(t, dir, "a_color.go"))
+
+	// Value: protects=a package file with a syntax error fails the run, naming that file, before any file of the package is written;
+	// fails_when=parsePackageDir skips or ignores files with parse errors, so the methods are generated from the remaining files;
+	// why_new=the fixture above only has an invalid enum; coverage shows the parse error return of parsePackageDir never runs;
+	// seam=none;
+	// no_claim=does not check the exit code of the command, only the returned error
+	dir = writeFiles(t, map[string]string{
+		"a_color.go":  valid,
+		"b_broken.go": "package example\n\nfunc broken() {\n",
+	})
+	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "b_broken.go")
+	assert.Equal(t, valid, readFile(t, dir, "a_color.go"), "a file that can't be parsed must not be skipped")
 }
 
 // TestRewrite_ImportedValueInOtherFile verifies that a value using an
@@ -2556,11 +2568,12 @@ type Status string //#enum
 
 const StatusA Status = "a"
 `})
-	require.NoError(t, os.Chmod(filepath.Join(dir, "status.go"), 0600))
+	// 0644 is no default mode of os.CreateTemp, so the mode must be set
+	require.NoError(t, os.Chmod(filepath.Join(dir, "status.go"), 0644))
 	require.NoError(t, Rewrite(dir, nil, nil, false))
 	info, err := os.Stat(filepath.Join(dir, "status.go"))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "no temporary files must be left")
@@ -2858,6 +2871,22 @@ const (
 	StatusA    Status = "a"
 )
 `,
+		// Value: protects=a generic underlying type with several type arguments, like j[int, int], is not shadowed by a parameter j of UnmarshalJSON;
+		// fails_when=baseTypeName only handles one type argument (ast.IndexExpr), so the parameter j shadows the type and the package doesn't build;
+		// why_new=the row above has one type argument; coverage shows the ast.IndexListExpr case of baseTypeName never runs;
+		// seam=none;
+		// no_claim=does not cover a parenthesized underlying type like (j)
+		"generic underlying type with type arguments": `package example
+
+type j[K comparable, V any] string
+
+type Status j[int, int] //#enum
+
+const (
+	StatusNone Status = "" //#null
+	StatusA    Status = "a"
+)
+`,
 		"alternative with _": `package example
 
 type kind string //#enum
@@ -2903,6 +2932,121 @@ func local() {
 `})
 	require.NoError(t, Rewrite(dir, nil, nil, false))
 	assert.Contains(t, readFile(t, dir, "status.go"), `"encoding/json"`)
+}
+
+// TestRewrite_RecursivePathAtModuleRoot verifies that ./... at a module
+// root, the documented CI check, is not skipped like a nested module,
+// else -validate would pass without checking anything.
+func TestRewrite_RecursivePathAtModuleRoot(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"go.mod":    "module example\n\ngo 1.24\n",
+		"status.go": "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+	})
+	require.ErrorContains(t, ValidateRewrite(dir+"/...", nil, false), "with missing or outdated methods")
+	require.NoError(t, Rewrite(dir+"/...", nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+
+	// Value: protects=./... through a symlinked checkout checks the packages of the symlink target;
+	// fails_when=filepath.WalkDir gets the symlinked root, which it doesn't follow, so no package is checked and -validate passes;
+	// why_new=the checks above use the real path;
+	// seam=none;
+	// no_claim=skipped where symlinks can't be created
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skip("can't create symlink:", err)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "kind.go"), []byte("package example\n\ntype Kind int //#enum\n\nconst KindA Kind = 1\n"), 0644))
+	require.ErrorContains(t, ValidateRewrite(link+"/...", nil, false), "found 1 enum type(s)")
+}
+
+// TestRewrite_FileInReadOnlyDirectory verifies that a writable file in a
+// directory without write permission is still rewritten, in place like
+// before v1.2.0, because no temporary file can be created next to it.
+func TestRewrite_FileInReadOnlyDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write in read-only directories")
+	}
+	dir := writeFiles(t, map[string]string{"status.go": "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"})
+	require.NoError(t, os.Chmod(dir, 0555))
+	t.Cleanup(func() { os.Chmod(dir, 0755) })
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+}
+
+// TestRewrite_InternalTestFileMethod verifies that the internal test files
+// of the package are read, so a method there that would be generated fails
+// instead of breaking go test after the methods were written.
+func TestRewrite_InternalTestFileMethod(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"status.go":      "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"status_test.go": "package example\n\nfunc (s Status) String() string { return \"test\" }\n",
+	})
+	require.ErrorContains(t, Rewrite(dir, nil, nil, false), "status_test.go:3 of a test file would be declared twice in test builds")
+	assert.NotContains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+}
+
+// TestRewrite_RecursiveReportsAllPackages verifies that an error in one
+// package of ./... doesn't hide the other packages: -validate reports all
+// errors and outdated enums, and the other packages are rewritten.
+func TestRewrite_RecursiveReportsAllPackages(t *testing.T) {
+	enum := "package %s\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
+	dir := t.TempDir()
+	for name, source := range map[string]string{
+		"p1": fmt.Sprintf(enum, "p1"),
+		"p2": "package p2\n\ntype Status string //#enum\n\nconst (\n\tStatusA Status = \"a\"\n\tStatusB Status = \"a\"\n)\n",
+		"p3": fmt.Sprintf(enum, "p3"),
+	} {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name, "status.go"), []byte(source), 0644))
+	}
+	err := ValidateRewrite(dir+"/...", nil, false)
+	require.ErrorContains(t, err, "duplicate enum value")
+	require.ErrorContains(t, err, "found 2 enum type(s) with missing or outdated methods")
+
+	require.ErrorContains(t, Rewrite(dir+"/...", nil, nil, false), "duplicate enum value")
+	assert.Contains(t, readFile(t, dir, "p1/status.go"), "func (s Status) Valid() bool")
+	assert.NotContains(t, readFile(t, dir, "p2/status.go"), "func (s Status) Valid() bool")
+	assert.Contains(t, readFile(t, dir, "p3/status.go"), "func (s Status) Valid() bool")
+}
+
+// TestValidateRewrite_RecursivePathWithoutPackages verifies that ./... over
+// a tree without Go files fails like a single directory without Go files,
+// so a mistyped CI path can't pass -validate silently.
+func TestValidateRewrite_RecursivePathWithoutPackages(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "docs"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "README.md"), []byte("# docs\n"), 0644))
+	require.ErrorContains(t, ValidateRewrite(dir+"/...", nil, false), "no Go files in")
+}
+
+// TestRewrite_TypeExpressionAsUnderlyingType verifies that methods generated
+// for an underlying type that is no identifier, like a generic type with
+// type arguments or a parenthesized type, are recognized on the next run,
+// else go-enum would reject its own output.
+func TestRewrite_TypeExpressionAsUnderlyingType(t *testing.T) {
+	for name, underlying := range map[string]string{
+		"type arguments": "type str[T any] string\n\ntype Status str[int] //#enum\n",
+		"parentheses":    "type Status (string) //#enum\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeFiles(t, map[string]string{"status.go": "package example\n\n" + underlying + "\nconst (\n\tStatusNone   Status = \"\" //#null\n\tStatusActive Status = \"active\"\n)\n"})
+			require.NoError(t, Rewrite(dir, nil, nil, false))
+			generated := readFile(t, dir, "status.go")
+			require.NoError(t, ValidateRewrite(dir, nil, false))
+			require.NoError(t, Rewrite(dir, nil, nil, false))
+			assert.Equal(t, generated, readFile(t, dir, "status.go"))
+			requireBuilds(t, dir)
+		})
+	}
+}
+
+// TestRewrite_ReceiverNamedLikeUnderlyingType verifies that the receiver
+// name of an existing method is not used when it equals the name of the
+// underlying type, which it would shadow in MarshalJSON.
+func TestRewrite_ReceiverNamedLikeUnderlyingType(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"status.go": "package example\n\ntype status string\n\ntype Status status //#enum\n\nconst (\n\tStatusNone   Status = \"\" //#null\n\tStatusActive Status = \"active\"\n)\n\nfunc (status Status) Label() string { return string(status) }\n"})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	requireBuilds(t, dir)
 }
 
 // TestRewrite_ImportsRemovedAndAddedInOneRun verifies that one run can remove

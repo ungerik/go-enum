@@ -299,6 +299,12 @@ func (s Status) String() string { return string(s) }
 
 go-enum generates all other methods of `Status` in `status.go`, but no `String()`.
 
+`go test` compiles the internal `_test.go` files of the package together with
+the generated methods, so a method there that would be generated, or a
+package-level name like `driver` of a package used by the generated methods,
+is an error. Their values are not used, because they are not compiled in
+regular builds.
+
 ### JSON Schema Support
 
 Add `,jsonschema` to the `//#enum` comment. The marker must be written
@@ -436,10 +442,10 @@ go-enum [options] [path]
 
 The path is one of:
 - A package directory, by default the current directory `.`: the methods of all enums of the package are generated.
-- A directory followed by `...`, like `./...`: the methods of the packages in that directory and in all directories below it are generated. Like with the go tool, directories starting with `.` or `_`, `testdata`, `vendor` and `node_modules` directories and directories of nested modules with their own `go.mod` are skipped, and directories without Go files are ignored. A single directory without Go files is an error.
+- A directory followed by `...`, like `./...`: the methods of the packages in that directory and in all directories below it are generated. Like with the go tool, directories starting with `.` or `_`, `testdata`, `vendor` and `node_modules` directories and directories of nested modules with their own `go.mod` are skipped, and directories without Go files are ignored, but an error if no directory has Go files. A single directory without Go files is an error. An error in one package doesn't stop the others: all errors and, with `-validate`, all outdated enums are reported.
 - A Go file: only the methods of the enums declared in that file are generated. The other files of its package are still read for enum values and existing methods. A file that is not a Go file of the package, like a `_test.go` file, is an error.
 
-Only the first path argument is used.
+Only one path argument is supported, and options must come before it, so `go-enum ./... -validate` is an error with exit code `2`.
 
 Options:
 - `-verbose`: Print the parsed package directories and the changed or unchanged files to stdout
@@ -451,7 +457,7 @@ Options:
 Exit codes:
 - `0` — Success (no issues found in `-validate` mode, or generation completed)
 - `1` — Error occurred (validation failed, file not found, invalid syntax, etc.)
-- `2` — `-help` was used or an option is invalid (`-h` prints the usage and exits with `0`)
+- `2` — `-help` was used, an option is invalid or more than one path was given (`-h` prints the usage and exits with `0`)
 
 Examples:
 
@@ -646,7 +652,7 @@ The tool is smart about updates:
 - Preserves your file structure and other code
 - The files of a package are only written after the methods of all its enums were generated without error
 - When generated methods are already up to date, the file is left byte-identical — no import reordering, no whitespace churn. Safe to run in `go generate` on every build.
-- A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error.
+- A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error. In a directory without write permission, a writable file is written in place like with `os.WriteFile`.
 - A file with CRLF line endings, like in a Windows checkout, keeps them. A file with only some CRLF line endings gets LF line endings, like with gofmt.
 
 The [Design](#design) section explains why it works this way.

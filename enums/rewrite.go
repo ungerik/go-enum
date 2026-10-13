@@ -3,6 +3,7 @@ package enums
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -67,35 +68,44 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 	if err != nil {
 		return err
 	}
-	var outdated []string
+	var (
+		outdated []string
+		errs     []error // of all packages, so that one run reports all of them
+		packages int     // with Go files
+	)
 	for _, dir := range dirs {
 		fset := token.NewFileSet()
 		files, sources, crlfFiles, err := parsePackageDir(fset, dir)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
-		if len(files) == 0 {
-			if recursive {
-				continue
+		if !slices.ContainsFunc(slices.Collect(maps.Keys(files)), func(filePath string) bool { return !isTestFile(filePath) }) {
+			if !recursive {
+				errs = append(errs, fmt.Errorf("no Go files in %s", dir))
 			}
-			return fmt.Errorf("no Go files in %s", dir)
+			continue
 		}
+		packages++
 		if onlyFile != "" {
 			onlyFile, err = packageFile(onlyFile, files)
 			if err != nil {
-				return err
+				errs = append(errs, err)
+				continue
 			}
 		}
 		fprintf(verboseOut, "parsing package: %s\n", dir)
 		enums, err := Find(fset, files)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 
 		// Generate the methods of all enums before writing any file
 		var (
 			changedFiles []string
 			results      = make(map[string][]byte)
+			failed       bool
 		)
 		enumsByFile := make(map[string][]*Enum)
 		for _, enum := range enums {
@@ -108,7 +118,9 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 			}
 			result, outdatedEnums, err := rewriteFile(fset, files[filePath], sources[filePath], fileEnums, debug)
 			if err != nil {
-				return fmt.Errorf("generating methods in %s: %w", filePath, err)
+				errs = append(errs, fmt.Errorf("generating methods in %s: %w", filePath, err))
+				failed = true
+				break
 			}
 			for _, enum := range outdatedEnums {
 				outdated = append(outdated, fmt.Sprintf("%s:%d: missing or outdated methods of enum type %s", enum.File, enum.Line, enum.Type))
@@ -123,7 +135,7 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 			changedFiles = append(changedFiles, filePath)
 			results[filePath] = result
 		}
-		if validate {
+		if validate || failed {
 			continue
 		}
 		for _, filePath := range changedFiles {
@@ -134,21 +146,25 @@ func rewrite(path string, verboseOut io.Writer, resultOut io.Writer, debug bool,
 				}
 				continue
 			}
-			err := writeFile(filePath, results[filePath])
-			if err != nil {
-				return err
+			if err := writeFile(filePath, results[filePath]); err != nil {
+				errs = append(errs, err)
+				break
 			}
 		}
 	}
+	if recursive && packages == 0 {
+		// Like a mistyped path, which must not pass -validate silently
+		errs = append(errs, fmt.Errorf("no Go files in %s or below", dirs[0]))
+	}
 
-	// In validation mode, report errors and fail if any were found
+	// In validation mode, report the outdated methods and fail if any were found
 	if validate && len(outdated) > 0 {
 		for _, msg := range outdated {
 			fmt.Fprintln(os.Stderr, msg)
 		}
-		return fmt.Errorf("found %d missing or outdated enum method(s)", len(outdated))
+		errs = append(errs, fmt.Errorf("found %d enum type(s) with missing or outdated methods", len(outdated)))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // packageDirs returns the package directories to rewrite for path,
@@ -169,6 +185,10 @@ func packageDirs(path string) (dirs []string, file string, recursive bool, err e
 	}
 	if !recursive {
 		return []string{path}, "", false, nil
+	}
+	// WalkDir doesn't follow a symlinked root, like a symlinked checkout
+	if path, err = filepath.EvalSymlinks(path); err != nil {
+		return nil, "", false, err
 	}
 	err = filepath.WalkDir(path, func(dir string, entry fs.DirEntry, err error) error {
 		if err != nil || !entry.IsDir() {
@@ -209,6 +229,11 @@ func writeFile(filePath string, data []byte) error {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*.tmp")
+	if errors.Is(err, fs.ErrPermission) {
+		// Without permission to create a file in the directory,
+		// write the file itself like os.WriteFile
+		return os.WriteFile(filePath, data, info.Mode().Perm())
+	}
 	if err != nil {
 		return err
 	}
@@ -223,12 +248,14 @@ func writeFile(filePath string, data []byte) error {
 		tmp.Close()
 		return err
 	}
-	// Like writing the file itself, keep its owner and group if possible
+	// Like writing the file itself, keep its owner and group if possible,
+	// and its mode, set through the open file to not follow a replaced path
 	chownLike(tmp, info)
-	if err := tmp.Close(); err != nil {
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), info.Mode().Perm()); err != nil {
+	if err := tmp.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), filePath)
@@ -243,6 +270,9 @@ func packageFile(path string, files map[string]*ast.File) (string, error) {
 		return "", err
 	}
 	for filePath := range files {
+		if isTestFile(filePath) {
+			continue
+		}
 		if info, err := os.Stat(filePath); err == nil && os.SameFile(info, pathInfo) {
 			return filePath, nil
 		}
@@ -250,8 +280,8 @@ func packageFile(path string, files map[string]*ast.File) (string, error) {
 	return "", fmt.Errorf("%s is not a Go file of the package in %s", path, filepath.Dir(path))
 }
 
-// parsePackageDir parses the Go files of a directory, except the test
-// files and the files starting with _ or . that the go tool ignores.
+// parsePackageDir parses the Go files of a directory, also the test files,
+// except the files starting with _ or . that the go tool ignores.
 //
 // The sources are parsed with LF line endings, so that they can be compared
 // with generated methods. Files with CRLF line endings, like in a Windows
@@ -265,7 +295,7 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 	sources = make(map[string][]byte)
 	crlfFiles = make(map[string]bool)
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || isIgnoredFile(entry.Name()) {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || isIgnoredFile(entry.Name()) && !isTestFile(entry.Name()) {
 			continue
 		}
 		filePath := filepath.Join(dir, entry.Name())
@@ -341,7 +371,8 @@ func (e *Enum) generateMethods() (methods string, imports []string, err error) {
 		}
 	}
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", source.Bytes(), parser.ParseComments|parser.SkipObjectResolution)
+	// With object resolution for usedPackageNames
+	file, err := parser.ParseFile(fset, "", source.Bytes(), parser.ParseComments)
 	if err != nil {
 		return "", nil, fmt.Errorf("can't parse generated methods of enum type %s.%s in %s:%d: %w", e.Package, e.Type, e.File, e.Line, err)
 	}

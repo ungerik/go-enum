@@ -28,7 +28,7 @@ of the enums declared in that file.
 
 	0   Success (no issues found in validate mode, or generation completed successfully)
 	1   Error occurred (validation failed, file not found, invalid syntax, etc.)
-	2   -help was used or an option is invalid
+	2   -help was used, an option is invalid or more than one path was given
 
 # Enum Definition
 
@@ -123,7 +123,11 @@ func main() {
 		verboseOut io.Writer
 		resultOut  io.Writer
 	)
-	if args := flag.Args(); len(args) > 0 {
+	if args := flag.Args(); len(args) > 1 {
+		// Options after the path are no options for the flag package
+		fmt.Fprintf(os.Stderr, "go-enum error: expected at most one path argument, got %d, options must come before the path\n", len(args))
+		os.Exit(2)
+	} else if len(args) == 1 {
 		path = args[0]
 	}
 	if verbose {

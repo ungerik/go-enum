@@ -57,6 +57,8 @@ type methodPattern struct {
 var (
 	actionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	identPattern = `[\p{L}_][\p{L}\p{N}_]*`
+	// typePattern matches the underlying type, like string, j[int] or (string)
+	typePattern = `(?:` + identPattern + `(?:\[[^\]\n]*\])?|\([^\n]*?\))`
 )
 
 // generatedPatterns are the patterns of the generated methods by method name,
@@ -74,7 +76,9 @@ var generatedPatterns = func() map[string][]methodPattern {
 			p.doc = append(p.doc, regexp.MustCompile("^"+strings.ReplaceAll(pattern, ident, identPattern)+`\.?$`))
 			lines = lines[1:]
 		}
-		body := strings.Join(lines, "\n")
+		// The underlying type is a type expression, not only an identifier
+		const typeIdent = "goenumtype"
+		body := strings.ReplaceAll(strings.Join(lines, "\n"), "{{.Underlying}}", typeIdent)
 		if !strings.Contains(body, "{{range") && !strings.Contains(body, "{{if") {
 			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, "", "package p\n"+actionRegexp.ReplaceAllString(body, ident), parser.SkipObjectResolution)
@@ -82,6 +86,7 @@ var generatedPatterns = func() map[string][]methodPattern {
 				panic(err)
 			}
 			pattern := regexp.QuoteMeta(formatWithoutDoc(fset, file.Decls[0].(*ast.FuncDecl)))
+			pattern = strings.ReplaceAll(pattern, typeIdent, typePattern)
 			p.body = regexp.MustCompile("^" + strings.ReplaceAll(pattern, ident, identPattern) + "$")
 		}
 		patterns[m.name] = append(patterns[m.name], p)
@@ -114,8 +119,8 @@ func (p *methodPattern) matchesDoc(doc *ast.CommentGroup) bool {
 	return true
 }
 
-// generates reports whether a method with the name is generated
-// for the enum unless it is marked with //#custom.
+// generates reports whether a method with the name is generated for the enum
+// by its underlying type, null value and flags, regardless of //#custom.
 func (e *Enum) generates(name string) bool {
 	for _, m := range generatedMethods {
 		if m.name == name && m.generate(e) {
@@ -174,10 +179,13 @@ func (e *Enum) wasGenerated(fset *token.FileSet, fn *ast.FuncDecl) bool {
 	if existing == "" {
 		return false
 	}
-	// Generated without or with any value as null value
+	// Generated without or with a value as null value, which the code of
+	// every method generated for a null value contains
 	nulls := []string{""}
 	for _, v := range e.Values {
-		nulls = append(nulls, v.Name)
+		if strings.Contains(existing, v.Name) {
+			nulls = append(nulls, v.Name)
+		}
 	}
 	for _, null := range nulls {
 		variant := *e

@@ -3,6 +3,7 @@
 package enums
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -41,4 +42,39 @@ const StatusA Status = "a"
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	require.True(t, ok)
 	assert.Equal(t, group, int(stat.Gid))
+}
+
+type statInfo struct {
+	fs.FileInfo
+	stat *syscall.Stat_t
+}
+
+func (i statInfo) Sys() any { return i.stat }
+
+// TestChownLike_KeepsGroupOfOtherUsersFile verifies that a rewritten file of
+// another user keeps at least its group, which a group member may set, else
+// the new file would get the group of the process with the original mode.
+func TestChownLike_KeepsGroupOfOtherUsersFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may set every owner")
+	}
+	groups, err := os.Getgroups()
+	require.NoError(t, err)
+	group := -1
+	for _, g := range groups {
+		if g != os.Getegid() {
+			group = g
+			break
+		}
+	}
+	if group < 0 {
+		t.Skip("needs a user with at least two groups")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "status")
+	require.NoError(t, err)
+	defer f.Close()
+	chownLike(f, statInfo{stat: &syscall.Stat_t{Uid: uint32(os.Geteuid() + 1), Gid: uint32(group)}})
+	info, err := f.Stat()
+	require.NoError(t, err)
+	assert.Equal(t, uint32(group), info.Sys().(*syscall.Stat_t).Gid)
 }
