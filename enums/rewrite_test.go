@@ -2559,6 +2559,23 @@ func (s Status) String() string { return string(s) }
 	requireBuilds(t, dir)
 }
 
+// TestRewrite_ReplacesFileThroughRename verifies that a rewritten file is
+// replaced by the temporary file, so that an interrupted write can't leave
+// a truncated source file, which a hard link to the old file shows.
+func TestRewrite_ReplacesFileThroughRename(t *testing.T) {
+	source := "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n"
+	dir := writeFiles(t, map[string]string{"status.go": source})
+	link := filepath.Join(t.TempDir(), "status.go")
+	if err := os.Link(filepath.Join(dir, "status.go"), link); err != nil {
+		t.Skip("can't create a hard link:", err)
+	}
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+	linked, err := os.ReadFile(link)
+	require.NoError(t, err)
+	assert.Equal(t, source, string(linked), "the file must be replaced, not written in place")
+}
+
 // TestRewrite_KeepsFileMode verifies that a rewritten file keeps its file
 // mode and that no temporary files are left in the package directory.
 func TestRewrite_KeepsFileMode(t *testing.T) {
@@ -3004,6 +3021,20 @@ func TestRewrite_InternalTestFileWithSyntaxError(t *testing.T) {
 	})
 	require.NoError(t, Rewrite(dir, nil, nil, false))
 	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+
+	// Also with a //go:build line being edited
+	dir = writeFiles(t, map[string]string{
+		"status.go":      "package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n",
+		"status_test.go": "//go:build linux &&\n\npackage example\n",
+	})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "status.go"), "func (s Status) Valid() bool")
+
+	// A test-only directory still has test files, which aren't parsed
+	// beyond their package clause because there are no enums to check
+	dir = writeFiles(t, map[string]string{"status_test.go": "package example\n\nfunc TestX(t *testing.T) {\n"})
+	require.ErrorContains(t, ValidateRewrite(dir, nil, false), "no non-test Go files in")
+	require.NoError(t, ValidateRewrite(dir+"/...", nil, false))
 }
 
 // TestRewrite_RecursiveReportsAllPackages verifies that an error in one
@@ -3099,6 +3130,7 @@ func TestRewrite_TypeExpressionAsUnderlyingType(t *testing.T) {
 	for name, underlying := range map[string]string{
 		"type arguments":        "type str[T any] string\n\ntype Status str[int] //#enum\n",
 		"nested type arguments": "type str[T any] string\n\ntype Status str[map[string][]byte] //#enum\n",
+		"deeply nested":         "type str[T any] string\n\ntype list[T any] []T\n\ntype Status str[list[list[map[[2]int][]byte]]] //#enum\n",
 		"slice type argument":   "type str[T any] string\n\ntype Status str[[]byte] //#enum\n",
 		"parentheses":           "type Status (string) //#enum\n",
 	} {

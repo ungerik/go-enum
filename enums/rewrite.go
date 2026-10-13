@@ -220,9 +220,9 @@ func packageDirs(path string) (dirs []string, file string, recursive bool, err e
 // writeFile writes data to a temporary file in the directory of filePath
 // and renames it to filePath, so that an interrupted write can't leave
 // a truncated source file. The file mode of filePath is kept. Without
-// permission to create or rename a file in the directory, or to give the
-// temporary file the group of filePath, the file is written in place
-// like with os.WriteFile, without that guarantee.
+// permission to create a file in the directory, or if the temporary file
+// can't get the group of filePath or can't replace it, like a bind mounted
+// file, filePath is written in place without that guarantee.
 func writeFile(filePath string, data []byte) error {
 	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
 		filePath = resolved
@@ -241,9 +241,8 @@ func writeFile(filePath string, data []byte) error {
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*.tmp")
 	if errors.Is(err, fs.ErrPermission) {
-		// Without permission to create a file in the directory,
-		// write the file itself like os.WriteFile
-		return os.WriteFile(filePath, data, info.Mode().Perm())
+		// Without permission to create a file in the directory
+		return writeInPlace(filePath, data)
 	}
 	if err != nil {
 		return err
@@ -262,10 +261,9 @@ func writeFile(filePath string, data []byte) error {
 	// Like writing the file itself, keep its owner and group if possible,
 	// and its mode, set through the open file to not follow a replaced path
 	if !chownLike(tmp, info) {
-		// The group permissions of the mode would apply to another group,
-		// so write the file itself like os.WriteFile
+		// The group permissions of the mode would apply to another group
 		tmp.Close()
-		return os.WriteFile(filePath, data, info.Mode().Perm())
+		return writeInPlace(filePath, data)
 	}
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		tmp.Close()
@@ -274,14 +272,27 @@ func writeFile(filePath string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), filePath); errors.Is(err, fs.ErrPermission) {
+	if err := os.Rename(tmp.Name(), filePath); err != nil {
 		// Like the file of another user in a sticky directory,
-		// write the file itself like os.WriteFile
-		return os.WriteFile(filePath, data, info.Mode().Perm())
-	} else if err != nil {
-		return err
+		// or a bind mounted file
+		return writeInPlace(filePath, data)
 	}
 	return nil
+}
+
+// writeInPlace writes data to the existing file filePath like os.WriteFile,
+// but without O_CREATE, which Linux refuses with fs.protected_regular
+// for the file of another user in a sticky directory.
+func writeInPlace(filePath string, data []byte) error {
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // packageFile returns the path of the parsed file that is the same file
@@ -320,18 +331,6 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 	files = make(map[string]*ast.File)
 	sources = make(map[string][]byte)
 	crlfFiles = make(map[string]bool)
-	read := func(filePath string) ([]byte, error) {
-		source, err := os.ReadFile(filePath) //#nosec G304 -- file of the package to rewrite
-		if err != nil {
-			return nil, err
-		}
-		if crlf := bytes.Count(source, []byte("\r\n")); crlf > 0 {
-			// Like gofmt, a file with some CRLF line endings gets LF line endings
-			crlfFiles[filePath] = crlf == bytes.Count(source, []byte("\n"))
-			source = bytes.ReplaceAll(source, []byte("\r\n"), []byte("\n"))
-		}
-		return source, nil
-	}
 	var testFiles []string
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || isIgnoredFile(entry.Name()) {
@@ -342,9 +341,14 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 			testFiles = append(testFiles, filePath)
 			continue
 		}
-		source, err := read(filePath)
+		source, err := os.ReadFile(filePath) //#nosec G304 -- file of the package to rewrite
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		if crlf := bytes.Count(source, []byte("\r\n")); crlf > 0 {
+			// Like gofmt, a file with some CRLF line endings gets LF line endings
+			crlfFiles[filePath] = crlf == bytes.Count(source, []byte("\n"))
+			source = bytes.ReplaceAll(source, []byte("\r\n"), []byte("\n"))
 		}
 		// With object resolution for usedPackageNames
 		file, err := parser.ParseFile(fset, filePath, source, parser.ParseComments)
@@ -359,18 +363,24 @@ func parsePackageDir(fset *token.FileSet, dir string) (files map[string]*ast.Fil
 	}) {
 		return files, sources, crlfFiles, nil
 	}
+	// Without other files, the test files have no enums to check,
+	// so they don't need to parse beyond their package clause
+	mode := parser.ParseComments
+	if len(sources) == 0 {
+		mode = parser.PackageClauseOnly
+	}
 	for _, filePath := range testFiles {
-		source, err := read(filePath)
+		// Only rewritten files need their source
+		source, err := os.ReadFile(filePath) //#nosec G304 -- test file of the package to rewrite
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		file, err := parser.ParseFile(fset, filePath, source, parser.ParseComments|parser.SkipObjectResolution)
+		file, err := parser.ParseFile(fset, filePath, source, mode)
 		if err != nil {
 			// Like a test file being edited, which doesn't stop generating the methods
 			continue
 		}
 		files[filePath] = file
-		sources[filePath] = source
 	}
 	return files, sources, crlfFiles, nil
 }

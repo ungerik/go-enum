@@ -54,7 +54,7 @@ func (i statInfo) Sys() any { return i.stat }
 
 // TestChownLike_KeepsGroupOfOtherUsersFile verifies that a rewritten file of
 // another user keeps at least its group, which a group member may set, else
-// the new file would get the group of the process with the original mode.
+// the file would be written in place without the guarantee of the temporary file.
 func TestChownLike_KeepsGroupOfOtherUsersFile(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root may set every owner")
@@ -78,6 +78,42 @@ func TestChownLike_KeepsGroupOfOtherUsersFile(t *testing.T) {
 	info, err := f.Stat()
 	require.NoError(t, err)
 	assert.Equal(t, uint32(group), info.Sys().(*syscall.Stat_t).Gid)
+}
+
+// TestRewrite_GroupNotKeptWritesInPlace verifies that a file of a group the
+// user is no member of is written in place, else the group permissions of its
+// mode would apply to the group of the process. On macOS a file created in
+// /tmp gets its group wheel, else the test is skipped.
+func TestRewrite_GroupNotKeptWritesInPlace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may set every group")
+	}
+	src, err := os.CreateTemp("/tmp", "status*.go")
+	if err != nil {
+		t.Skip("can't create a file in /tmp:", err)
+	}
+	_, err = src.WriteString("package example\n\ntype Status string //#enum\n\nconst StatusA Status = \"a\"\n")
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
+	filePath := filepath.Join(t.TempDir(), "status.go")
+	if err := os.Rename(src.Name(), filePath); err != nil {
+		os.Remove(src.Name())
+		t.Skip("can't move the file:", err)
+	}
+	before, err := os.Stat(filePath)
+	require.NoError(t, err)
+	gid := int(before.Sys().(*syscall.Stat_t).Gid)
+	groups, err := os.Getgroups()
+	require.NoError(t, err)
+	if gid == os.Getegid() || slices.Contains(groups, gid) {
+		t.Skip("needs a file of a group the user is no member of, like a /tmp file on macOS")
+	}
+	require.NoError(t, Rewrite(filepath.Dir(filePath), nil, nil, false))
+	after, err := os.Stat(filePath)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "must be written in place")
+	assert.Equal(t, uint32(gid), after.Sys().(*syscall.Stat_t).Gid)
+	assert.Contains(t, readFile(t, filepath.Dir(filePath), "status.go"), "func (s Status) Valid() bool")
 }
 
 // TestChownLike_ReportsGroupNotKept verifies that chownLike reports a group

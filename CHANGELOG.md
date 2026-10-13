@@ -111,7 +111,8 @@ are unchanged:
 - Untyped consts converted to the enum type from an imported value, like
   `MethodGet = Method(http.MethodGet)`, are enum values. Untyped consts
   computed from them with an operator or with `min` or `max`, like
-  `MethodGetX = MethodGet + "X"`, can't be evaluated and are an error.
+  `MethodGetX = MethodGet + "X"`, can't be evaluated and are an error,
+  unless marked with `//#exclude`.
 - Enum values are evaluated with `go/types`: consts declared with `iota` and
   implicit repetition, like `KindB` after `KindA Kind = iota`, conversions
   like `FlagD = Flag(0x10)` and other constant expressions are enum values,
@@ -167,12 +168,13 @@ are unchanged:
 - Files are written to a temporary file that is synced to disk and replaces
   the file, so an interrupted run or a crash can't leave a truncated source
   file. Read-only files are not rewritten, like before, and a file in a
-  directory without write permission, or of another user in a directory with
-  the sticky bit like `/tmp`, is written in place. The owner and group
+  directory without write permission, or that can't be replaced, like a file
+  of another user in a directory with the sticky bit like `/tmp` or a bind
+  mounted file, is written in place. The owner and group
   of a rewritten file are kept as far as the process is permitted to change
   them, and a file whose group can't be kept is written in place. A
   rewritten file that was hard linked is no longer linked to its other
-  paths.
+  paths, and its ACLs and extended attributes are not kept.
 - Marker comments at other places than the end of a type or const line or
   the doc comment of a method, like `) //#null`, are errors instead of being
   ignored.
@@ -221,7 +223,8 @@ are unchanged:
 - The internal `_test.go` files of the package are read for methods and
   package-level names that would collide with the generated methods in test
   builds, which is an error. Their values are still not used, and a test
-  file that doesn't parse, like one being edited, is skipped.
+  file that doesn't parse or has an invalid `//go:build` line, like one
+  being edited, is skipped.
 - A file path argument that is not a Go file of its package, like a
   `_test.go` file, is an error instead of silently doing nothing.
 - No longer depends on github.com/ungerik/go-astvisit. Imports of a rewritten

@@ -1746,12 +1746,22 @@ func TestFind_MarkerOnValueWithoutEnumType(t *testing.T) {
 	// no_claim=does not check that a //#null there fails, only that //#exclude is accepted
 	fset, files := parseFiles(t, map[string]string{
 		"status.go":       "package example\n\nimport \"net/http\"\n\ntype Method string //#enum\n\nconst (\n\tMethodGet = Method(http.MethodGet)\n\tMethodAny = Method(\"*\") //#exclude\n)\n\ntype Kind int //#enum\n\nconst (\n\tKindA Kind = iota\n\tKindB //#exclude\n\tKindC\n)\n",
-		"status_linux.go": "package example\n\nconst MethodLinux Method = \"LINUX\" //#exclude\n\nconst MethodLinuxAny = Method(\"*\") //#exclude\n",
+		"status_linux.go": "package example\n\nconst MethodLinux Method = \"LINUX\" //#exclude\n\nconst MethodLinuxAny = Method(\"*\") //#exclude\n\nconst MethodLinuxParen = (Method)(\"+\") //#exclude\n",
 	})
 	enums, err := findInFile(fset, files, files["status.go"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"MethodGet"}, valueNames(enums["Method"]))
 	assert.Equal(t, []string{"KindA", "KindC"}, valueNames(enums["Kind"]))
+
+	// Such a file is not type checked with the enum type, so an untyped
+	// const computed from an enum const needs the type for its marker
+	fset, files = parseFiles(t, map[string]string{
+		"kind.go":       "package example\n\ntype Kind int //#enum\n\nconst KindA Kind = 1\n",
+		"kind_linux.go": "package example\n\nconst KindLinux = KindA + 1 //#exclude\n",
+	})
+	_, err = Find(fset, files)
+	require.ErrorContains(t, err, "KindLinux in kind_linux.go:3 is no const of an enum type")
+	assert.Contains(t, err.Error(), "declare it with the enum type if it is one")
 }
 
 func TestFind_ReportsAllErrors(t *testing.T) {
@@ -2287,19 +2297,31 @@ func TestFind_UnevaluableConstsOfEnumType(t *testing.T) {
 		"or of converted imports":       "type Flag int //#enum\n\nconst (\n\tFlagRead = Flag(os.O_RDONLY)\n\tx        = FlagRead | Flag(os.O_WRONLY)\n)\n",
 		"not of bool enum":              "type Flag bool //#enum\n\nconst (\n\tFlagOn = Flag(os.O_RDONLY == 0)\n\tx      = !Flag(os.O_RDONLY == 0)\n)\n",
 		"and of bool enum":              "type Flag bool //#enum\n\nconst (\n\tFlagOn = Flag(os.O_RDONLY == 0)\n\tx      = FlagOn && Flag(os.O_WRONLY == 1)\n)\n",
+		"or of bool enum":               "type Flag bool //#enum\n\nconst (\n\tFlagOn = Flag(os.O_RDONLY == 0)\n\tx      = FlagOn || Flag(os.O_WRONLY == 1)\n)\n",
 		"max":                           "type Flag int //#enum\n\nconst (\n\tFlagB Flag = 2\n\tx          = max(Flag(os.O_RDONLY), FlagB)\n)\n",
+		"min":                           "type Flag int //#enum\n\nconst (\n\tFlagB Flag = 2\n\tx          = min(FlagB, Flag(os.O_RDONLY))\n)\n",
+		"null alias":                    "type Flag int //#enum\n\nconst (\n\tFlagRead = Flag(os.O_RDONLY)\n\tx        = FlagRead //#null\n)\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			fset, files, astFile := parseSource(t, "package example\n\nimport \"os\"\n\n"+consts)
 			_, err := findInFile(fset, files, astFile)
 			require.ErrorContains(t, err, "enum const x in test.go:")
 			assert.Contains(t, err.Error(), "can't be evaluated because it uses an import")
+			assert.NotContains(t, err.Error(), "is no const of an enum type", "a marker of x is no stray marker")
 		})
 	}
 
-	// An alias of such a const is no enum value, without error
-	fset, files, astFile := parseSource(t, "package example\n\nimport \"os\"\n\ntype Flag int //#enum\n\nconst (\n\tFlagRead    = Flag(os.O_RDONLY)\n\tFlagDefault = FlagRead\n)\n")
+	// //#exclude marks such a const as no enum value, and an alias needs
+	// no marker, so their markers are no stray markers of another type
+	fset, files, astFile := parseSource(t, "package example\n\nimport \"os\"\n\ntype Flag int //#enum\n\nconst (\n\tFlagRead    = Flag(os.O_RDONLY)\n\tFlagWrite   = Flag(os.O_WRONLY)\n\tFlagRW      = FlagRead | FlagWrite //#exclude\n\tFlagDefault = FlagRead //#exclude\n)\n")
 	enums, err := findInFile(fset, files, astFile)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FlagRead", "FlagWrite"}, valueNames(enums["Flag"]))
+
+	// An alias of such a const is no enum value, without error,
+	// and neither is a const that uses an import without the enum type
+	fset, files, astFile = parseSource(t, "package example\n\nimport \"os\"\n\ntype Flag int //#enum\n\nconst (\n\tFlagRead    = Flag(os.O_RDONLY)\n\tFlagDefault = FlagRead\n)\n\nconst maxLen = len(os.DevNull)\n")
+	enums, err = findInFile(fset, files, astFile)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"FlagRead"}, valueNames(enums["Flag"]))
 }
@@ -2311,6 +2333,23 @@ func TestFind_NullMarkerAfterFailedEnum(t *testing.T) {
 	_, err := findInFile(fset, files, astFile)
 	require.ErrorContains(t, err, "duplicate enum value")
 	assert.NotContains(t, err.Error(), "must be declared in")
+
+	// Also when the enum fails before its values are read
+	for _, typ := range []string{"complex128", "= string"} {
+		fset, files, astFile := parseSource(t, "package example\n\ntype Status "+typ+" //#enum\n\nconst (\n\tStatusA    Status = \"a\"\n\tStatusNone Status = \"\" //#null\n)\n")
+		_, err := findInFile(fset, files, astFile)
+		require.Error(t, err, typ)
+		assert.NotContains(t, err.Error(), "must be declared in", typ)
+	}
+
+	// A //#null const of a type declared per platform names all its files
+	fset, files = parseFiles(t, map[string]string{
+		"signal_linux.go": "package example\n\ntype Signal int //#enum\n\nconst SignalA Signal = 1\n",
+		"signal_other.go": "//go:build !linux\n\npackage example\n\ntype Signal int //#enum\n\nconst SignalB Signal = 2\n",
+		"extra_linux.go":  "//go:build linux && cgo\n\npackage example\n\nconst SignalNone Signal = 0 //#null\n",
+	})
+	_, err = Find(fset, files)
+	require.ErrorContains(t, err, "must be declared in signal_linux.go or signal_other.go, the file of the enum type")
 }
 
 func TestFind_AnnotationOfOtherToolAfterGofmt(t *testing.T) {
@@ -2662,6 +2701,7 @@ const methodSize = unsafe.Sizeof(MethodGet)
 		// count, are no consts of the enum type, so they must not fail
 		`Method(http.MethodGet) == "GET"`: false,
 		"1 << Kind(syscall.SIGKILL)":      false,
+		"len(Method(http.MethodGet))":     false,
 	} {
 		t.Run(expr, func(t *testing.T) {
 			fset, files, astFile := parseSource(t, "package example\n\nimport (\n\t\"net/http\"\n\t\"syscall\"\n)\n\ntype Kind int //#enum\n\nconst KindA Kind = 1\n\ntype Method string //#enum\n\nconst MethodGet Method = \"GET\"\n\nconst x = "+expr+"\n")
