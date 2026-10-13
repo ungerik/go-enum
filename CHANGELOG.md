@@ -128,7 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file are only grouped like goimports does when generated methods add an
   import, else the import groups of the file are kept as formatted by gofmt.
 - Requires Go 1.26. Dependencies updated: testify v1.12.1,
-  golang.org/x/tools v0.51.0, golang.org/x/mod v0.41.0,
+  golang.org/x/tools v0.52.0, golang.org/x/mod v0.42.0,
   golang.org/x/sync v0.24.0.
 
 ### Fixed
