@@ -212,7 +212,40 @@ possible, so cover them with a negated build constraint like
 `//go:build !linux`.
 For platform-specific values, declare the enum type with its values in each
 platform-specific file. Each declaration gets its own generated methods,
-which also use the values of the files without build constraints.
+which also use the values of the files without build constraints:
+
+```go
+// signal.go
+package example
+
+const SignalInterrupt Signal = 2
+```
+
+```go
+// signal_linux.go
+package example
+
+type Signal int //#enum
+
+const (
+	SignalHangup Signal = 1
+	SignalPoll   Signal = 29
+)
+```
+
+```go
+// signal_other.go
+//go:build !linux
+
+package example
+
+type Signal int //#enum
+
+const SignalHangup Signal = 1
+```
+
+On Linux `Signal(0).Enums()` returns `SignalInterrupt`, `SignalHangup` and
+`SignalPoll`, on other platforms `SignalInterrupt` and `SignalHangup`.
 
 An untyped const converted to the enum type, like
 `const MethodGet = Method(http.MethodGet)`, is also an enum value.
@@ -228,7 +261,43 @@ like a hand-written `String()` per platform, must be
 marked with [`//#custom`](#hand-written-methods-custom), else it is an error.
 Such a method is then not generated, so it must be declared in every build
 of the file of the enum type, like in `status_linux.go` and in a file with
-`//go:build !linux`, else it is an error.
+`//go:build !linux`, else it is an error:
+
+```go
+// status.go
+package example
+
+type Status string //#enum
+
+const (
+	StatusActive   Status = "active"
+	StatusInactive Status = "inactive"
+)
+```
+
+```go
+// status_linux.go
+package example
+
+// String returns the status for systemd units.
+//
+//#custom
+func (s Status) String() string { return "unit-" + string(s) }
+```
+
+```go
+// status_other.go
+//go:build !linux
+
+package example
+
+// String returns the status.
+//
+//#custom
+func (s Status) String() string { return string(s) }
+```
+
+go-enum generates all other methods of `Status` in `status.go`, but no `String()`.
 
 ### JSON Schema Support
 
@@ -580,6 +649,8 @@ The tool is smart about updates:
 - A file is written to a temporary file in the same directory that is synced to disk and then renamed to the file, so an interrupted run or a crash can't leave a truncated source file. The file mode is kept, and so are the owner and group as far as the process is permitted to change them. A hard linked file is replaced by a new file. A read-only file is not rewritten, which is an error.
 - A file with CRLF line endings, like in a Windows checkout, keeps them. A file with only some CRLF line endings gets LF line endings, like with gofmt.
 
+The [Design](#design) section explains why it works this way.
+
 ## Best Practices
 
 1. **Always run after changing enums**: Add `go-enum` to your `go generate` workflow
@@ -608,6 +679,8 @@ go generate ./...
 ```
 
 ## Supported Types
+
+Enum types can be declared in any package, also in `main` packages.
 
 String-based enums:
 - `string`
@@ -639,6 +712,83 @@ Float and bool-based enums get all methods except `String` and the nullable `Sca
 - Only one null value per enum type
 - Enum values in other files that are not compiled in every build of the file of the enum type are not used, and methods the generator would produce in other files must be marked `//#custom` (see [Values in Other Files](#values-in-other-files)). Every combination of build tags other than GOOS, GOARCH, `go1.N`, `gc` and `gccgo`, like `cgo` or custom tags, is evaluated, so with more than 12 of them in the build constraints of two files, the values of the other file are not used, its methods are compared like the methods of files compiled together with the enum type, and its `//#custom` methods are reported as missing in some builds
 - The receiver name is taken from existing methods, else it is the first letter of the type name in lowercase, or `e`, `recv`, `e1`, `e2` and so on if that collides with an identifier used by the generated methods
+
+## Design
+
+Why go-enum works the way it does, and what that trades off.
+
+### Values and Methods Across the Package
+
+go-enum only rewrites the file declaring the enum type, but the generated
+methods are compiled together with every file of the package. So they may only
+reference consts that exist in every build of that file, and a method declared
+in another file must not be generated again. Reading only the file of the enum
+type, like before v1.2.0, missed the values of other files, and workarounds
+like `const Invalid = Code("")` in that file made sentinels valid values.
+
+The build constraints of every file are evaluated for all builds the go tool can
+produce (see [Values in Other Files](#values-in-other-files)), which decides for
+each file whether its values are used and its methods are compared:
+
+```
+file                with the enum type in status_linux.go     values     methods
+values.go           compiled in every build                  used       compared
+values_unix.go      //go:build unix, in every build          used       compared
+values_arm64.go     compiled in some builds (linux/arm64)    not used   compared
+string_windows.go   never compiled together                  ignored    ignored
+```
+
+Trade-offs:
+- Values that exist only in some builds are not used, without an error.
+  Reporting each of them would be too strict for per-platform values.
+- GOOS values that no build constraint names are always possible, so
+  `//#custom` methods for a list of platforms need a negated fallback like
+  `//go:build !linux`.
+- Every combination of the independent build tags is evaluated, so with
+  more than 12 of them the safe answer is used: values are not used and
+  methods are compared.
+
+Comparing the text of build constraints was rejected, because it silently
+dropped values when the same constraint was written differently, like
+`status_linux.go` with an additional `//go:build linux` line.
+
+### Values Evaluated With go/types
+
+The package is type checked with `go/types` without loading imported
+packages. Constant values are evaluated exactly like by the compiler, so `iota`,
+implicit repetition and conversions work, and duplicates written differently,
+like `1` and `0x1`, are detected. Copying the value expressions as
+text, like before v1.2.0, produced wrong or uncompilable `EnumStrings()` for
+them. Not loading imports needs no `go list`, module cache or compilable
+package, at the cost that values computed from imports can't be evaluated:
+they are referenced by name, and their duplicates can't be detected.
+
+### Recognizing Generated Methods
+
+Before v1.2.0 every method with the name of a generated method was replaced,
+which silently overwrote hand-written methods. Now a method is only replaced
+if it was generated before, recognized by the whole generated doc comment, and
+for `UnmarshalJSON`, whose doc comment is a common phrase, also by its code.
+Every other method that would be generated is an error, and `//#custom` keeps
+it. A method that is never generated for the underlying type, like `String`
+of an integer enum, is hand-written. If it has the code of a generated method
+it is an error instead of being removed, because `string(x)` is correct for
+rune and byte enums.
+
+The trade-off: a hand-written method that copies the generated doc comment
+is replaced, and comment lines of other tools in the doc comment of a
+replaced method, like `//nolint`, are removed with it.
+
+### Fail Loud, Write Safely
+
+Problems that would silently produce wrong or uncompilable code are errors:
+reserved marker words in the wrong form or at the wrong place, markers at
+consts that are not of an enum type, and declarations or imports named like
+a package used by the generated methods. All errors of a package are
+reported at once, and its files are only written after the methods of all
+its enums were generated, each through a temporary file that is synced to
+disk and replaces it. Files with up-to-date methods are not written at all,
+so their bytes, including the import layout, stay unchanged.
 
 ## Changelog
 

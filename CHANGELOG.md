@@ -63,6 +63,30 @@ are unchanged:
   package name.
 - `Enum.LastEnumDecl` and `Enum.KnownMethods` were removed.
 
+  ```go
+  fset := token.NewFileSet()
+  files := make(map[string]*ast.File)
+  for _, path := range goFilePaths { // all non-test Go files of the package
+  	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+  	if err != nil {
+  		return err
+  	}
+  	files[path] = file
+  }
+  found, err := enums.Find(fset, files)
+  if err != nil {
+  	return err
+  }
+  for _, e := range found {
+  	if e.File != filePath { // only the enums declared in one file, like v1.1.0
+  		continue
+  	}
+  	for _, v := range e.Values {
+  		fmt.Println(e.Type, v.Name, v.StringExpr)
+  	}
+  }
+  ```
+
 ### Added
 
 - `//#exclude` line comment marker for consts of an enum type that are not
