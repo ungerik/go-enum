@@ -61,6 +61,7 @@ enum type. The generated methods are written to the file of the enum type.
 For all enums:
   - Valid() bool - Checks if value is valid
   - Validate() error - Returns error if invalid
+  - ValidOr(defaultVal T) T - Returns defaultVal if invalid
   - Enums() []T - Returns all enum values
   - EnumStrings() []string - Returns all values as strings
 
@@ -68,6 +69,8 @@ For string enums:
   - String() string - Implements fmt.Stringer
 
 For nullable enums (marked with //#null):
+  - ValidNotNull() bool - Checks if value is valid and not null
+  - ValidNotNullOr(defaultVal T) T - Returns defaultVal if invalid or null
   - IsNull() bool
   - IsNotNull() bool
   - SetNull()

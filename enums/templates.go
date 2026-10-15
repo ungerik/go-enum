@@ -21,6 +21,9 @@ var generatedMethods = []struct {
 }{
 	{"Valid", validTemplate, always},
 	{"Validate", validateTemplate, always},
+	{"ValidOr", validOrTemplate, always},
+	{"ValidNotNull", validNotNullTemplate, (*Enum).IsNullable},
+	{"ValidNotNullOr", validNotNullOrTemplate, (*Enum).IsNullable},
 	{"Enums", enumsTemplate, always},
 	{"EnumStrings", enumStringsTemplate, always},
 	{"String", stringMethodsTemplate, (*Enum).IsStringType},
@@ -231,8 +234,8 @@ func formatWithoutDoc(fset *token.FileSet, fn *ast.FuncDecl) string {
 	return formatted.String()
 }
 
-// Valid + Validate templates, split per method so `//#custom` can target
-// each individually. Generated for all enum types.
+// Valid + Validate + ValidOr templates, split per method so `//#custom`
+// can target each individually. Generated for all enum types.
 
 var validTemplate = template.Must(template.New("").Parse(`
 // Valid indicates if {{.Recv}} is any of the valid values for {{.Type}}
@@ -254,6 +257,35 @@ func ({{.Recv}} {{.Type}}) Validate() error {
 		return fmt.Errorf("invalid value %#v for type {{.Package}}.{{.Type}}", {{.Recv}})
 	}
 	return nil
+}
+`))
+
+var validOrTemplate = template.Must(template.New("").Parse(`
+// ValidOr returns {{.Recv}} if it is any of the valid values for {{.Type}}, else {{.Param "defaultVal" "def"}}
+func ({{.Recv}} {{.Type}}) ValidOr({{.Param "defaultVal" "def"}} {{.Type}}) {{.Type}} {
+	if {{.Recv}}.Valid() {
+		return {{.Recv}}
+	}
+	return {{.Param "defaultVal" "def"}}
+}
+`))
+
+// ValidNotNull and ValidNotNullOr are generated for enum types with a null
+// value (marked with //#null).
+var validNotNullTemplate = template.Must(template.New("").Parse(`
+// ValidNotNull indicates if {{.Recv}} is valid and not the null value {{.Null}}
+func ({{.Recv}} {{.Type}}) ValidNotNull() bool {
+	return {{.Recv}}.IsNotNull() && {{.Recv}}.Valid()
+}
+`))
+
+var validNotNullOrTemplate = template.Must(template.New("").Parse(`
+// ValidNotNullOr returns {{.Recv}} if it is valid and not the null value {{.Null}}, else {{.Param "defaultVal" "def"}}
+func ({{.Recv}} {{.Type}}) ValidNotNullOr({{.Param "defaultVal" "def"}} {{.Type}}) {{.Type}} {
+	if {{.Recv}}.IsNotNull() && {{.Recv}}.Valid() {
+		return {{.Recv}}
+	}
+	return {{.Param "defaultVal" "def"}}
 }
 `))
 
