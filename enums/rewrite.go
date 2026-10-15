@@ -27,8 +27,9 @@ import (
 // and generates or updates type-safe methods for each enum.
 //
 // It finds all types marked with //#enum, generates validation methods
-// (Valid, Validate), utility methods (Enums, EnumStrings), and optional
-// methods based on flags (String, IsNull, MarshalJSON, Scan, Value, JSONSchema).
+// (Valid, Validate, ValidOr), utility methods (Enums, EnumStrings), and optional
+// methods based on flags (String, ValidNotNull, ValidNotNullOr, IsNull,
+// MarshalJSON, Scan, Value, JSONSchema).
 //
 // The generated methods are written to the file declaring the enum type.
 // They replace methods generated before, or are inserted after the last

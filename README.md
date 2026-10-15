@@ -75,6 +75,9 @@ if err != nil {
 	// status is invalid
 }
 
+// Fall back to a default value if status is invalid
+status = status.ValidOr(StatusPending)
+
 // Get all enum values
 allStatuses := Status("").Enums()
 // Returns: []Status{StatusPending, StatusConfirmed, ...}
@@ -114,6 +117,13 @@ if priority.IsNull() {
 if priority.IsNotNull() {
 	// Handle non-null case
 }
+
+if priority.ValidNotNull() {
+	// Handle a valid, non-null value
+}
+
+// Fall back to a default value if priority is null or invalid
+priority = priority.ValidNotNullOr(PriorityMid)
 
 // Set to null
 priority.SetNull()
@@ -401,9 +411,10 @@ Rules:
 
 - The marker applies only to the immediately-following method declaration.
 - It is meaningful only for methods the generator would otherwise produce
-  (`Valid`, `Validate`, `Enums`, `EnumStrings`, `String`, `IsNull`,
-  `IsNotNull`, `SetNull`, `MarshalJSON`, `UnmarshalJSON`, `Scan`, `Value`,
-  `JSONSchema`). On other methods it is a no-op.
+  (`Valid`, `Validate`, `ValidOr`, `ValidNotNull`, `ValidNotNullOr`, `Enums`,
+  `EnumStrings`, `String`, `IsNull`, `IsNotNull`, `SetNull`, `MarshalJSON`,
+  `UnmarshalJSON`, `Scan`, `Value`, `JSONSchema`). On other methods it is
+  a no-op.
 - A custom-marked method is not added to the generated block, so no
   duplicate is produced. Other methods on the same type continue to be
   regenerated normally.
@@ -489,6 +500,7 @@ go-enum -validate ./...
 |--------|-------------|
 | `Valid() bool` | Returns true if the value is a valid enum constant |
 | `Validate() error` | Returns an error if the value is invalid |
+| `ValidOr(defaultVal T) T` | Returns the value if it is valid, else `defaultVal` |
 | `Enums() []T` | Returns slice of all valid enum values |
 | `EnumStrings() []string` | Returns slice of all enum values as strings |
 
@@ -502,6 +514,8 @@ go-enum -validate ./...
 
 | Method | Description |
 |--------|-------------|
+| `ValidNotNull() bool` | Returns true if the value is valid and not null |
+| `ValidNotNullOr(defaultVal T) T` | Returns the value if it is valid and not null, else `defaultVal` |
 | `IsNull() bool` | Returns true if the value equals the null constant |
 | `IsNotNull() bool` | Returns true if the value is not null |
 | `SetNull()` | Sets the value to the null constant |

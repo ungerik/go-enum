@@ -45,6 +45,7 @@ const (
 	// Check that methods were generated
 	assert.Contains(t, result, "func (s Status) Valid() bool")
 	assert.Contains(t, result, "func (s Status) Validate() error")
+	assert.Contains(t, result, "func (s Status) ValidOr(defaultVal Status) Status")
 	assert.Contains(t, result, "func (Status) Enums() []Status")
 	assert.Contains(t, result, "func (Status) EnumStrings() []string")
 	assert.Contains(t, result, "func (s Status) String() string")
@@ -55,6 +56,7 @@ const (
 	assert.Contains(t, result, "StatusShipped")
 
 	// Should not have nullable methods
+	assert.NotContains(t, result, "ValidNotNull")
 	assert.NotContains(t, result, "IsNull")
 	assert.NotContains(t, result, "MarshalJSON")
 }
@@ -122,6 +124,7 @@ const (
 	result := output.String()
 
 	// Check nullable methods
+	assert.Contains(t, result, "func (p Priority) ValidNotNull() bool")
 	assert.Contains(t, result, "func (p Priority) IsNull() bool")
 	assert.Contains(t, result, "func (p Priority) IsNotNull() bool")
 	assert.Contains(t, result, "func (p *Priority) SetNull()")
@@ -1162,6 +1165,9 @@ func (s Status) Valid() bool { return s == StatusA }
 func (s Status) Validate() error { return nil }
 
 //#custom
+func (s Status) ValidOr(def Status) Status { return def }
+
+//#custom
 func (Status) Enums() []Status { return []Status{StatusA} }
 
 //#custom
@@ -1220,6 +1226,17 @@ const (
 	StatusInactive Status = "INACTIVE"
 )
 
+//#custom
+func (s Status) ValidNotNull() bool { return s == StatusActive }
+
+//#custom
+func (s Status) ValidNotNullOr(def Status) Status {
+	if s == StatusActive {
+		return s
+	}
+	return def
+}
+
 // UnmarshalJSON accepts legacy bool true/false plus the regular string form.
 //
 //#custom
@@ -1248,6 +1265,8 @@ func (s *Status) UnmarshalJSON(data []byte) error {
 		"custom UnmarshalJSON body must be preserved")
 	assert.Contains(t, result, `*s = StatusActive`,
 		"custom branch must be preserved")
+	assert.Contains(t, result, "func (s Status) ValidNotNull() bool { return s == StatusActive }")
+	assert.Contains(t, result, "func (s Status) ValidNotNullOr(def Status) Status {")
 
 	// The //#custom marker must remain in the doc comment so re-generation
 	// continues to recognize it. gofmt may normalize "//#custom" to
@@ -1259,6 +1278,8 @@ func (s *Status) UnmarshalJSON(data []byte) error {
 	// Exactly one UnmarshalJSON must exist — no duplicate from template.
 	assert.Equal(t, 1, strings.Count(result, ") UnmarshalJSON("),
 		"must not generate a second UnmarshalJSON")
+	assert.Equal(t, 1, strings.Count(result, ") ValidNotNull("))
+	assert.Equal(t, 1, strings.Count(result, ") ValidNotNullOr("))
 
 	// Generated companions (non-custom) must still appear.
 	assert.Contains(t, result, "func (s Status) IsNull() bool")
@@ -1309,6 +1330,19 @@ func (s Status) Validate() error {
 	return nil
 }`,
 			signature: ") Validate() error",
+		},
+		{
+			name: "ValidOr",
+			methodDecl: `//#custom
+// ValidOr returns s if it is any of the valid values for Status, else defaultVal
+func (s Status) ValidOr(defaultVal Status) Status {
+	// hand-written: any non-empty value is kept
+	if s == "" {
+		return defaultVal
+	}
+	return s
+}`,
+			signature: ") ValidOr(defaultVal Status) Status",
 		},
 		{
 			name: "Enums",
@@ -1364,8 +1398,8 @@ const (
 				strings.Contains(result, "//#custom") || strings.Contains(result, "// #custom"),
 				"//#custom marker must remain in doc comment")
 
-			// The other three always-generated methods must still be emitted.
-			allSigs := []string{") Valid() bool", ") Validate() error", ") Enums() []Status", ") EnumStrings() []string"}
+			// The other always-generated methods must still be emitted.
+			allSigs := []string{") Valid() bool", ") Validate() error", ") ValidOr(defaultVal Status) Status", ") Enums() []Status", ") EnumStrings() []string"}
 			for _, other := range allSigs {
 				if other == tc.signature {
 					continue
@@ -1625,12 +1659,109 @@ const (
 // because the generated methods must never break the build of a package.
 func requireBuilds(t *testing.T, dir string) {
 	t.Helper()
+	requireGo(t, dir, "build", ".")
+}
+
+// requireTestsPass fails the test if the tests of the package in dir,
+// which call the generated methods, don't pass.
+func requireTestsPass(t *testing.T, dir string) {
+	t.Helper()
+	requireGo(t, dir, "test", ".")
+}
+
+// requireGo runs the go command with args in the package in dir as module
+// example and fails the test if it fails.
+func requireGo(t *testing.T, dir string, args ...string) {
+	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example\n\ngo 1.24\n"), 0644))
-	cmd := exec.Command("go", "build", ".")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "package with generated methods must build:\n%s", output)
+	require.NoError(t, err, "go %s of package with generated methods must succeed:\n%s", strings.Join(args, " "), output)
+}
+
+// TestRewrite_ValidOr verifies that the generated ValidOr returns the
+// receiver if it is valid, also the null value, and else the default value,
+// and that ValidNotNull and ValidNotNullOr of a nullable enum reject the null
+// and invalid values. The Or methods' parameter is renamed if the receiver has its
+// name, else the method doesn't compile because of a duplicate parameter,
+// or if the null value has its name, which the doc comment of
+// ValidNotNullOr names next to the parameter.
+func TestRewrite_ValidOr(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"status.go": `package example
+
+type Status string //#enum
+
+const (
+	StatusNone   Status = "" //#null
+	StatusActive Status = "active"
+)
+`,
+		"mode.go": `package example
+
+type Mode int //#enum
+
+const (
+	ModeSlow Mode = 1
+	ModeFast Mode = 2
+)
+
+func (defaultVal Mode) Label() string { return "mode" }
+`,
+		"kind.go": `package example
+
+type kind string //#enum
+
+const (
+	defaultVal kind = "" //#null
+	kindA      kind = "a"
+)
+`,
+	})
+	require.NoError(t, Rewrite(dir, nil, nil, false))
+	assert.Contains(t, readFile(t, dir, "mode.go"), "// ValidOr returns defaultVal if it is any of the valid values for Mode, else def\nfunc (defaultVal Mode) ValidOr(def Mode) Mode {")
+	assert.NotContains(t, readFile(t, dir, "mode.go"), "ValidNotNull", "only generated for nullable enums")
+	assert.Contains(t, readFile(t, dir, "kind.go"), "func (k kind) ValidNotNull() bool {")
+	assert.Contains(t, readFile(t, dir, "kind.go"), "// ValidNotNullOr returns k if it is valid and not the null value defaultVal, else def\nfunc (k kind) ValidNotNullOr(def kind) kind {")
+	require.NoError(t, ValidateRewrite(dir, nil, false))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "valid_or_test.go"), []byte(`package example
+
+import "testing"
+
+func TestValidOr(t *testing.T) {
+	for _, c := range []struct{ got, want any }{
+		{StatusActive.ValidOr(StatusNone), StatusActive},
+		{StatusNone.ValidOr(StatusActive), StatusNone},
+		{Status("unknown").ValidOr(StatusActive), StatusActive},
+		{ModeFast.ValidOr(ModeSlow), ModeFast},
+		{Mode(0).ValidOr(ModeSlow), ModeSlow},
+		{StatusActive.ValidNotNullOr(StatusNone), StatusActive},
+		{StatusNone.ValidNotNullOr(StatusActive), StatusActive},
+		{Status("unknown").ValidNotNullOr(StatusActive), StatusActive},
+		{kindA.ValidNotNullOr(defaultVal), kindA},
+		{defaultVal.ValidNotNullOr(kindA), kindA},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %v, want %v", c.got, c.want)
+		}
+	}
+	for _, c := range []struct{ got, want bool }{
+		{StatusActive.ValidNotNull(), true},
+		{StatusNone.ValidNotNull(), false},
+		{Status("unknown").ValidNotNull(), false},
+		{kindA.ValidNotNull(), true},
+		{defaultVal.ValidNotNull(), false},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %v, want %v", c.got, c.want)
+		}
+	}
+}
+`), 0644))
+	requireTestsPass(t, dir)
 }
 
 // TestRewrite_AliasInOtherFile verifies that an alias of an enum value
@@ -1790,7 +1921,7 @@ const (
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "status.go"), []byte(notNullable), 0644))
 	require.NoError(t, Rewrite(dir, nil, nil, false))
 	result := readFile(t, dir, "status.go")
-	for _, removed := range []string{"IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON", "Scan", "Value()", `"bytes"`, `"encoding/json"`, `"database/sql/driver"`} {
+	for _, removed := range []string{"ValidNotNull", "IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON", "Scan", "Value()", `"bytes"`, `"encoding/json"`, `"database/sql/driver"`} {
 		assert.NotContains(t, result, removed)
 	}
 	assert.Contains(t, result, "StatusNone,\n\t\tStatusActive:")
@@ -2379,7 +2510,7 @@ const (
 	StatusActive Status = "active"
 )
 `
-	nullableMethods := []string{"IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON", "Scan", "Value()", `"database/sql/driver"`}
+	nullableMethods := []string{"ValidNotNull", "IsNull", "IsNotNull", "SetNull", "MarshalJSON", "UnmarshalJSON", "Scan", "Value()", `"database/sql/driver"`}
 
 	t.Run("null value excluded", func(t *testing.T) {
 		dir := writeFiles(t, map[string]string{"status.go": source})

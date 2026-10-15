@@ -77,6 +77,14 @@ const (
 	// 	return nil
 	// }
 	//
+	// // ValidOr returns s if it is any of the valid values for Status, else defaultVal
+	// func (s Status) ValidOr(defaultVal Status) Status {
+	// 	if s.Valid() {
+	// 		return s
+	// 	}
+	// 	return defaultVal
+	// }
+	//
 	// // Enums returns all valid values for Status
 	// func (Status) Enums() []Status {
 	// 	return []Status{
@@ -126,6 +134,9 @@ const (
 	// Output:
 	// func (s Status) Valid() bool {
 	// func (s Status) Validate() error {
+	// func (s Status) ValidOr(defaultVal Status) Status {
+	// func (s Status) ValidNotNull() bool {
+	// func (s Status) ValidNotNullOr(defaultVal Status) Status {
 	// func (Status) Enums() []Status {
 	// func (Status) EnumStrings() []string {
 	// func (s Status) String() string {
@@ -170,6 +181,7 @@ func (s Status) String() string { return "Status(" + string(s) + ")" }
 	// Output:
 	// func (s Status) Valid() bool {
 	// func (s Status) Validate() error {
+	// func (s Status) ValidOr(defaultVal Status) Status {
 	// func (Status) Enums() []Status {
 	// func (Status) EnumStrings() []string {
 	// func (s Status) String() string { return "Status(" + string(s) + ")" }

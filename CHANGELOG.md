@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [v1.3.0] - 2026-10-15
+
+### Added
+
+- Generate `ValidOr(defaultVal T) T` for all enums to return a fallback when
+  the value is invalid.
+- Generate `ValidNotNull() bool` and `ValidNotNullOr(defaultVal T) T` for
+  nullable enums to check for or replace null and invalid values.
+
+### Upgrading
+
+- Hand-written methods with these newly generated names must be marked
+  `//#custom` to keep them, or deleted to use the generated versions.
+
 ## [v1.2.0] - 2026-10-13
 
 ### Upgrading
@@ -276,6 +292,8 @@ are unchanged:
 
 Initial tagged release.
 
+[Unreleased]: https://github.com/ungerik/go-enum/compare/v1.3.0...HEAD
+[v1.3.0]: https://github.com/ungerik/go-enum/compare/v1.2.0...v1.3.0
 [v1.2.0]: https://github.com/ungerik/go-enum/compare/v1.1.0...v1.2.0
 [v1.1.0]: https://github.com/ungerik/go-enum/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/ungerik/go-enum/releases/tag/v1.0.0
